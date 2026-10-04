@@ -13,6 +13,7 @@ const SHELL = [
   './', 'index.html', 'pwa.js', 'manifest.webmanifest',
   'app/main.js', 'app/store.js', 'app/db.js', 'app/tree.js', 'app/export.js', 'app/backup.js',
   'app/media.js', 'app/platform.js', 'app/util.js', 'app/sync.js', 'app/supabase.js', 'app/config.js',
+  'app/sheet.js', 'app/gestures.js', 'app/player.js',
   'app/styles.css', 'icons/192.png', 'icons/512.png', 'icons/512-maskable.png',
 ];
 

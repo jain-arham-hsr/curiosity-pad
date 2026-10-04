@@ -7,8 +7,13 @@ import * as sync from './sync.js';
 import { auth } from './supabase.js';
 import { compressImage, Recorder } from './media.js';
 import { flatten, isWithin } from './tree.js';
+import { trailToMarkdown } from './export.js';
 import { ago, formatDuration, shortDate, stamp } from './util.js';
 import { hasExtension, openMicSetup } from './platform.js';
+import { openSheet, closeSheet, coarse } from './sheet.js';
+import { attachGestures } from './gestures.js';
+import { createPlayer } from './player.js';
+import { getMeta, setMeta } from './db.js';
 
 const $ = (id) => document.getElementById(id);
 const bar = $('bar');
@@ -24,7 +29,7 @@ const state = {
   replyTo: null,
   editing: null,
   draft: '',
-  confirming: null, // a node id, or 'trail'
+  confirming: null, // a node id (keyboard delete)
   renaming: false,
   expanded: new Set(),
   pendingImage: null, // { blob, url }
@@ -36,6 +41,7 @@ const state = {
   account: null, // session, when signed in
   counts: { toSend: 0, inTransit: 0 },
   conflicts: [],
+  hintsSeen: 3, // first-use tip shows while < 3
 };
 
 const refs = {};
@@ -46,17 +52,31 @@ let refreshTimer;
 
 // Trail markers: how far a node has travelled.
 const MARKERS = {
-  local: ['○', 'On this device only'],
-  relay: ['◐', 'Reached the relay'],
+  local: ['○', 'Only on this device'],
+  relay: ['◐', 'Reached the relay, not yet on your other device'],
   both: ['●', 'On both devices'],
 };
 
+const svg = (body, stroke = 1.8) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 const ICONS = {
-  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
-  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
-  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/></svg>',
-  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
-  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 12l16-8-6 16-2.5-6.5L4 12z"/></svg>',
+  back: svg('<path d="M15 5l-7 7 7 7"/>', 2),
+  trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+  image: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>'),
+  mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'),
+  send: svg('<path d="M4 12l16-8-6 16-2.5-6.5L4 12z"/>'),
+  reply: svg('<path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10"/>'),
+  indent: svg('<path d="M4 6h16M10 12h10M10 18h10M4 10l3 2-3 2"/>'),
+  outdent: svg('<path d="M4 6h16M10 12h10M10 18h10M7 10l-3 2 3 2"/>'),
+  up: svg('<path d="M12 19V5M6 11l6-6 6 6"/>'),
+  down: svg('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+  edit: svg('<path d="M4 20h4l10-10-4-4L4 16v4zM13 7l4 4"/>'),
+  copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>'),
+  more: svg('<circle cx="5" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="19" cy="12" r="1.4" fill="currentColor"/>'),
+  help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7M12 17h.01"/>'),
+  sync: svg('<path d="M20 11a8 8 0 0 0-14.5-4M4 13a8 8 0 0 0 14.5 4M4 4v5h5M20 20v-5h-5"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>'),
+  user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  pencil: svg('<path d="M4 20h4l10-10-4-4L4 16v4z"/>', 1.6),
 };
 
 // ---- tiny DOM helpers -----------------------------------------------------
@@ -76,18 +96,23 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
-function button(label, onclick, { cls = '', title } = {}) {
-  return h('button', {
+function button(label, onclick, { cls = '', title, icon } = {}) {
+  const el = h('button', {
     class: cls,
     title,
+    type: 'button',
     onclick: (e) => { e.stopPropagation(); onclick(e); },
-  }, label);
+  });
+  if (icon) el.innerHTML = ICONS[icon];
+  el.append(label);
+  return el;
 }
 
 function iconButton(icon, title, onclick, cls = '') {
   return h('button', {
     class: `icon ${cls}`,
     title,
+    type: 'button',
     'aria-label': title,
     html: ICONS[icon],
     onclick: (e) => { e.stopPropagation(); onclick(e); },
@@ -112,12 +137,35 @@ function snippet(node) {
   return node.kind === 'image' ? 'Image' : 'Voice note';
 }
 
+const isQuestion = (node) => node.kind === 'text' && /\?\s*$/.test(node.body ?? '');
+
+// A persistent problem goes in the status line; a passing message is a toast.
 function notice(message, kind = 'error') {
   state.notice = message;
   state.noticeKind = kind;
   renderStatus();
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => { state.notice = ''; renderStatus(); }, 8000);
+}
+
+let toastEl;
+let toastTimer;
+function toast(message, { bad = false, ms = 2800 } = {}) {
+  toastEl ??= document.body.appendChild(h('div', { id: 'toast', role: 'status' }));
+  toastEl.textContent = message;
+  toastEl.classList.toggle('bad', bad);
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+async function copyText(text, what = 'Copied') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(what);
+  } catch (err) {
+    toast(`Couldn't copy: ${err.message}`, { bad: true });
+  }
 }
 
 // ---- views ----------------------------------------------------------------
@@ -131,6 +179,7 @@ function resetTrailState() {
   state.expanded.clear();
   clearPendingImage();
   cancelRecording();
+  closeSheet();
 }
 
 function revokeMedia() {
@@ -154,13 +203,17 @@ async function openTrail(id) {
   if (state.trail?.id !== id) {
     resetTrailState();
     revokeMedia();
+    if (state.hintsSeen < 3) {
+      state.hintsSeen += 1;
+      setMeta('hintsSeen', state.hintsSeen);
+    }
   }
   state.view = 'trail';
   state.trail = trail;
   await store.setActiveTrail(id);
   renderComposer();
   await refresh({ scroll: 'bottom' });
-  refs.textarea?.focus();
+  if (!coarse()) refs.textarea?.focus();
 }
 
 async function refresh({ scroll } = {}) {
@@ -183,10 +236,9 @@ async function refresh({ scroll } = {}) {
     state.trail = trail;
     state.nodes = nodes;
     const ids = new Set(nodes.map((n) => n.id));
-    for (const key of ['selected', 'replyTo', 'editing']) {
+    for (const key of ['selected', 'replyTo', 'editing', 'confirming']) {
       if (state[key] && !ids.has(state[key])) state[key] = null;
     }
-    if (state.confirming && state.confirming !== 'trail' && !ids.has(state.confirming)) state.confirming = null;
     renderTrailBar();
     renderNodes(scroll);
     renderChips();
@@ -202,7 +254,7 @@ function scheduleRefresh() {
 // ---- trails list ----------------------------------------------------------
 
 function renderTrailsBar() {
-  bar.replaceChildren(h('h1', {}, 'Curiosity Pad'));
+  bar.replaceChildren(h('h1', {}, 'Curiosity Pad'), iconButton('help', 'How to use', (e) => showHelp(e.currentTarget)));
 }
 
 function renderTrailList(trails) {
@@ -222,9 +274,26 @@ function renderTrailList(trails) {
       'No Question Trails yet. Start one below with the question you are chasing.'), restore, account);
     return;
   }
-  list.replaceChildren(...trails.map((t) => h('button', { class: 'trail', onclick: () => openTrail(t.id) },
+  list.replaceChildren(...trails.map((t) => h('button', { class: 'trail', type: 'button', onclick: () => openTrail(t.id) },
     h('span', { class: 'trail-title' }, t.title),
     h('span', { class: 'trail-meta' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'} · ${shortDate(t.updated)}`))), account);
+}
+
+function showHelp(anchor) {
+  const touch = coarse();
+  openSheet({
+    title: 'How to use',
+    anchor,
+    items: [
+      { text: 'A Question Trail is the chain of questions you had to answer to understand something. Add each one as it comes up; nest follow-ups under the question that caused them. Read bottom-up, it is the outline of your note.' },
+      { divider: true },
+      { text: touch
+        ? 'Tap an entry to select it, long-press for all actions.\nSwipe right to nest it under the entry above, left to un-nest.\nPull down at the top to sync.'
+        : 'Click an entry to select it.\nTab / Shift+Tab nest and un-nest · Alt+↑↓ move · R reply · E edit · Delete removes.\nDrag an entry onto another: top edge = before, bottom = after, middle = inside.' },
+      { divider: true },
+      { text: `${MARKERS.local[0]}  ${MARKERS.local[1]}\n${MARKERS.relay[0]}  ${MARKERS.relay[1]}\n${MARKERS.both[0]}  ${MARKERS.both[1]}` },
+    ],
+  });
 }
 
 // ---- sign in / password recovery -----------------------------------------
@@ -308,7 +377,7 @@ function showRecovery(params) {
 
 async function requestRestore() {
   await store.requestRestore();
-  notice('Asked your other device. Open Curiosity Pad there; it will send everything on its next sync.', 'info');
+  toast('Asked your other device. Open Curiosity Pad there to send everything.', { ms: 5000 });
   runSync();
 }
 
@@ -324,20 +393,25 @@ async function signOut() {
 function renderTrailBar() {
   if (state.renaming) return; // keep the rename field alive
   const trail = state.trail;
-  const parts = [iconButton('back', 'All Question Trails', showTrails)];
-  if (state.confirming === 'trail') {
-    parts.push(
-      h('span', { class: 'bar-confirm' }, 'Delete this trail and everything in it?'),
-      button('Delete', deleteTrail, { cls: 'danger' }),
-      button('Cancel', () => { state.confirming = null; renderTrailBar(); }),
-    );
-  } else {
-    parts.push(
-      h('h1', { class: 'title', title: 'Click to rename', onclick: startRename }, trail.title),
-      iconButton('trash', 'Delete this trail', () => { state.confirming = 'trail'; renderTrailBar(); }),
-    );
-  }
-  bar.replaceChildren(...parts);
+  bar.replaceChildren(
+    iconButton('back', 'All Question Trails', showTrails),
+    h('h1', { class: 'title', title: 'Rename', onclick: startRename }, trail.title, h('span', { class: 'pencil', html: ICONS.pencil })),
+    iconButton('more', 'Trail menu', (e) => showTrailMenu(e.currentTarget)),
+  );
+}
+
+function showTrailMenu(anchor) {
+  const trail = state.trail;
+  openSheet({
+    title: trail.title,
+    anchor,
+    items: [
+      { label: 'Rename', icon: ICONS.pencil, onSelect: startRename },
+      { label: 'Copy as outline', icon: ICONS.copy, hint: 'Markdown', onSelect: () => copyText(trailToMarkdown(trail, state.nodes), 'Outline copied') },
+      { divider: true },
+      { label: 'Delete trail', icon: ICONS.trash, danger: true, confirm: 'Delete this trail and everything in it?', onSelect: deleteTrail },
+    ],
+  });
 }
 
 function startRename() {
@@ -365,9 +439,9 @@ function startRename() {
 
 async function deleteTrail() {
   const id = state.trail.id;
-  state.confirming = null;
   await store.deleteTrail(id);
   await showTrails();
+  toast('Trail deleted');
 }
 
 // ---- one trail: nodes -----------------------------------------------------
@@ -379,7 +453,7 @@ function renderNodes(scroll) {
     list.replaceChildren(h('p', { class: 'empty' },
       'Nothing here yet. Write what you want to understand, and add each new question as it comes up.'));
   } else {
-    list.replaceChildren(...rows.map(nodeRow));
+    list.replaceChildren(...rows.map(nodeRow), ...[tip(rows.length)].filter(Boolean));
   }
   hydrateMedia();
   if (scroll === 'bottom') {
@@ -397,6 +471,16 @@ function renderNodes(scroll) {
       field.setSelectionRange(field.value.length, field.value.length);
     }
   }
+}
+
+// Shown under the entries the first few times a trail is opened.
+function tip(count) {
+  if (count < 2 || state.hintsSeen >= 3) return null;
+  const text = coarse()
+    ? 'Tap an entry for actions · swipe right to nest it under the one above'
+    : 'Click an entry for actions · Tab nests it · drag to reorder';
+  return h('div', { class: 'tip' }, h('span', {}, text),
+    button('Got it', () => { state.hintsSeen = 3; setMeta('hintsSeen', 3); renderNodes(); }, { cls: 'linkish' }));
 }
 
 async function hydrateMedia() {
@@ -419,16 +503,16 @@ function nodeRow({ node, depth }) {
   const editing = state.editing === node.id;
 
   const card = h('div', {
-    class: `card${selected ? ' selected' : ''}`,
+    class: `card${selected ? ' selected' : ''}${isQuestion(node) ? ' question' : ''}`,
     tabindex: '0',
-    draggable: editing ? 'false' : 'true',
+    draggable: editing || coarse() ? 'false' : 'true',
   },
   editing ? editor(node) : content(node),
   meta(node),
   selected && !editing ? actions(node) : null);
 
   card.addEventListener('click', (e) => {
-    if (e.target.closest('a, audio, button, textarea, input')) return;
+    if (e.target.closest('a, button, textarea, input, .player')) return;
     select(selected ? null : node.id);
   });
   card.addEventListener('dragstart', (e) => {
@@ -442,6 +526,13 @@ function nodeRow({ node, depth }) {
     card.classList.remove('dragging');
     clearDropMarks();
   });
+  if (!editing) {
+    attachGestures(card, {
+      onSwipeRight: () => nest(node.id, 1),
+      onSwipeLeft: () => nest(node.id, -1),
+      onLongPress: () => { select(node.id, { quiet: true }); showActions(node.id); },
+    });
+  }
 
   const row = h('div', { class: 'row', style: `--depth:${depth}`, dataset: { id: node.id } }, card);
   row.addEventListener('dragover', (e) => {
@@ -487,7 +578,11 @@ function clearDropMarks(only) {
 function content(node) {
   const parts = [];
   if (node.kind === 'image') parts.push(h('img', { class: 'media', alt: node.caption || 'Image', dataset: { media: node.mediaId } }));
-  if (node.kind === 'audio') parts.push(h('audio', { controls: true, preload: 'metadata', dataset: { media: node.mediaId } }));
+  if (node.kind === 'audio') {
+    const player = createPlayer({ duration: node.duration ?? 0 });
+    player.dataset.media = node.mediaId;
+    parts.push(player);
+  }
   const text = node.kind === 'text' ? node.body : node.caption;
   if (text) {
     const long = text.length > 600 || text.split('\n').length > 10;
@@ -497,43 +592,85 @@ function content(node) {
       parts.push(button(open ? 'Show less' : 'Show more', () => {
         if (open) state.expanded.delete(node.id); else state.expanded.add(node.id);
         renderNodes();
-      }, { cls: 'more' }));
+      }, { cls: 'more-text' }));
     }
   }
   return h('div', { class: 'content' }, ...parts);
 }
 
 function meta(node) {
-  const [mark, label] = MARKERS[node.sync] ?? MARKERS.local;
+  const sync = MARKERS[node.sync] ? node.sync : 'local';
+  const [mark, label] = MARKERS[sync];
   const flag = node.flag
-    ? h('div', { class: 'flag' }, node.flag, ' ', button('OK', () => store.clearFlag(node.trailId, node.id), { cls: 'linkish' }))
+    ? h('div', { class: 'flag' }, node.flag, ' ', button('Got it', () => store.clearFlag(node.trailId, node.id), { cls: 'linkish' }))
     : null;
+  const marker = coarse()
+    ? button(mark, () => toast(label), { cls: `marker ${sync}`, title: label })
+    : h('span', { class: `marker ${sync}`, title: label, 'aria-label': label }, mark);
   return h('div', { class: 'meta-wrap' }, flag, h('div', { class: 'meta' },
     node.source?.url
       ? h('a', { class: 'source', href: node.source.url, target: '_blank', rel: 'noreferrer', title: node.source.title || node.source.url }, hostOf(node.source.url))
       : null,
-    node.kind === 'audio' && node.duration ? h('span', {}, formatDuration(node.duration)) : null,
     h('span', { title: new Date(node.created).toLocaleString() }, stamp(node.created)),
     node.edited ? h('span', { class: 'edited', title: `Edited ${new Date(node.edited).toLocaleString()}` }, 'edited') : null,
-    h('span', { class: 'marker', title: label, 'aria-label': label }, mark)));
+    marker));
 }
 
+// Under a selected entry. Touch gets the essentials and a menu; desktop gets
+// the frequent ones inline too.
 function actions(node) {
   if (state.confirming === node.id) {
     const hasReplies = state.nodes.some((n) => n.parentId === node.id);
     return h('div', { class: 'actions confirm' },
-      h('span', {}, hasReplies ? 'Delete? Its replies move up a level.' : 'Delete this?'),
+      h('span', { style: 'margin-right:auto' }, hasReplies ? 'Delete? Its replies move up a level.' : 'Delete this?'),
       button('Delete', () => removeNode(node.id), { cls: 'danger' }),
       button('Cancel', () => { state.confirming = null; renderNodes(); }));
   }
+  const more = button('', (e) => showActions(node.id, e.currentTarget), { cls: 'more', icon: 'more', title: 'More' });
+  if (coarse()) {
+    return h('div', { class: 'actions' },
+      button('Reply', () => reply(node.id), { icon: 'reply' }),
+      button('Edit', () => startEdit(node.id), { icon: 'edit' }),
+      more);
+  }
+  const t = state.trail.id;
   return h('div', { class: 'actions' },
-    button('Reply', () => reply(node.id), { title: 'Add a follow-up under this (R)' }),
-    button('←', () => store.outdent(state.trail.id, node.id), { title: 'Un-nest (Shift+Tab)' }),
-    button('→', () => store.indent(state.trail.id, node.id), { title: 'Nest under the one above (Tab)' }),
-    button('↑', () => store.shift(state.trail.id, node.id, -1), { title: 'Move up (Alt+↑)', cls: 'touch-only' }),
-    button('↓', () => store.shift(state.trail.id, node.id, 1), { title: 'Move down (Alt+↓)', cls: 'touch-only' }),
-    button('Edit', () => startEdit(node.id), { title: 'Edit (E)' }),
-    button('Delete', () => { state.confirming = node.id; renderNodes(); }, { cls: 'danger', title: 'Delete' }));
+    button('Reply', () => reply(node.id), { icon: 'reply', title: 'Add a follow-up under this (R)' }),
+    button('', () => store.indent(t, node.id), { icon: 'indent', title: 'Nest under the one above (Tab)' }),
+    button('', () => store.outdent(t, node.id), { icon: 'outdent', title: 'Un-nest (Shift+Tab)' }),
+    button('Edit', () => startEdit(node.id), { icon: 'edit', title: 'Edit (E)' }),
+    button('Delete', () => { state.confirming = node.id; renderNodes(); }, { cls: 'danger', icon: 'trash', title: 'Delete (⌫)' }),
+    more);
+}
+
+function showActions(id, anchor) {
+  const node = state.nodes.find((n) => n.id === id);
+  if (!node) return;
+  const t = state.trail.id;
+  const siblings = flatten(state.nodes).map((r) => r.node.id);
+  const text = node.kind === 'text' ? node.body : node.caption;
+  const hasReplies = state.nodes.some((n) => n.parentId === id);
+  openSheet({
+    title: snippet(node),
+    anchor,
+    items: [
+      { label: 'Reply', icon: ICONS.reply, hint: coarse() ? '' : 'R', onSelect: () => reply(id) },
+      { label: 'Nest under the one above', icon: ICONS.indent, hint: coarse() ? 'swipe →' : 'Tab', onSelect: () => nest(id, 1) },
+      { label: 'Un-nest', icon: ICONS.outdent, hint: coarse() ? '← swipe' : 'Shift+Tab', disabled: !node.parentId, onSelect: () => nest(id, -1) },
+      { label: 'Move up', icon: ICONS.up, hint: coarse() ? '' : 'Alt+↑', onSelect: () => store.shift(t, id, -1) },
+      { label: 'Move down', icon: ICONS.down, hint: coarse() ? '' : 'Alt+↓', onSelect: () => store.shift(t, id, 1) },
+      { divider: true },
+      { label: 'Edit', icon: ICONS.edit, hint: coarse() ? '' : 'E', onSelect: () => startEdit(id) },
+      { label: 'Copy text', icon: ICONS.copy, disabled: !text, onSelect: () => copyText(text) },
+      { divider: true },
+      { label: 'Delete', icon: ICONS.trash, danger: true, confirm: hasReplies ? 'Delete? Its replies move up a level.' : 'Delete this entry?', onSelect: () => removeNode(id) },
+    ].filter((item) => item.label !== 'Move up' || siblings.length > 1),
+  });
+}
+
+async function nest(id, dir) {
+  const ok = dir > 0 ? await store.indent(state.trail.id, id) : await store.outdent(state.trail.id, id);
+  if (!ok) toast(dir > 0 ? 'Nothing above to nest under' : 'Already at the top level');
 }
 
 function editor(node) {
@@ -560,16 +697,16 @@ function editor(node) {
   const preview = node.kind === 'text' ? null : content({ ...node, caption: '' });
   return h('div', { class: 'edit' }, preview, area,
     h('div', { class: 'edit-actions' },
-      h('span', { class: 'hint' }, '⌘↩ to save'),
+      h('span', { class: 'hint fine-only' }, '⌘↩ to save'),
       button('Cancel', cancel),
       button('Save', save, { cls: 'primary' })));
 }
 
-function select(id) {
+function select(id, { quiet = false } = {}) {
   state.selected = id;
   state.confirming = null;
   renderNodes();
-  if (id) list.querySelector(`[data-id="${id}"] .card`)?.focus({ preventScroll: true });
+  if (id && !quiet) list.querySelector(`[data-id="${id}"] .card`)?.focus({ preventScroll: true });
 }
 
 function reply(id) {
@@ -617,7 +754,7 @@ function renderComposer() {
     if (file) setPendingImage(file);
   });
 
-  const area = h('textarea', { rows: '1', placeholder: 'Ask, note, paste…', 'aria-label': 'Message' });
+  const area = h('textarea', { rows: '1', placeholder: 'Ask, note, paste…', 'aria-label': 'Message', enterkeyhint: 'send' });
   area.addEventListener('input', () => { autosize(); updatePrimary(); });
   area.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); primaryAction(); }
@@ -630,7 +767,7 @@ function renderComposer() {
     setPendingImage(file);
   });
 
-  const primary = h('button', { class: 'icon round primary', onclick: () => primaryAction() });
+  const primary = h('button', { class: 'icon round primary', type: 'button', onclick: () => primaryAction() });
   refs.textarea = area;
   refs.primary = primary;
   refs.chips = h('div', { class: 'chips' });
@@ -697,7 +834,7 @@ async function setPendingImage(file) {
     updatePrimary();
     refs.textarea?.focus();
   } catch (err) {
-    notice(`Couldn't read that image: ${err.message}`);
+    toast(`Couldn't read that image: ${err.message}`, { bad: true });
   }
 }
 
@@ -735,7 +872,7 @@ function enqueueSend(trailId, entry) {
       const id = await store.addNode(trailId, { ...entry, parentId });
       await refresh({ scroll: parentId ? id : 'bottom' });
     })
-    .catch((err) => notice(`Couldn't add that: ${err.message}`));
+    .catch((err) => toast(`Couldn't add that: ${err.message}`, { bad: true }));
   return sendChain;
 }
 
@@ -765,10 +902,10 @@ async function startRecording() {
     await recorder.start();
   } catch (err) {
     if (err.name === 'NotAllowedError' && hasExtension) {
-      notice('Chrome needs one-time microphone access. Allow it in the tab that just opened, then record again.');
+      toast('Chrome needs one-time microphone access. Allow it in the tab that just opened, then record again.', { ms: 6000 });
       openMicSetup();
     } else {
-      notice(`Couldn't start recording: ${err.message}`);
+      toast(`Couldn't start recording: ${err.message}`, { bad: true });
     }
     return;
   }
@@ -797,46 +934,69 @@ function cancelRecording() {
   updatePrimary();
 }
 
-// ---- status line: trail markers + backup ----------------------------------
+// ---- status line: one pill; details in a sheet ----------------------------
 
 function renderStatus() {
-  const left = state.notice ? h('span', { class: state.noticeKind === 'info' ? 'info' : 'notice' }, state.notice) : syncSummary();
-  const conflict = state.conflicts.length
-    ? h('div', { class: 'conflicts' }, state.conflicts.at(-1),
-      state.conflicts.length > 1 ? ` (+${state.conflicts.length - 1} more)` : '', ' ',
-      button('OK', async () => { await store.clearConflicts(); refresh(); }, { cls: 'linkish' }))
-    : null;
-  statusLine.replaceChildren(h('div', { class: 'status-row' }, left, backupControl() ?? ''), conflict ?? '');
+  if (state.notice) {
+    statusLine.replaceChildren(h('span', { class: state.noticeKind === 'info' ? 'info' : 'notice' }, state.notice));
+    return;
+  }
+  const { mark, text, tone } = statusSummary();
+  const pill = h('button', { class: `pill${tone ? ` ${tone}` : ''}`, type: 'button', title: 'Sync and backup details', onclick: (e) => showSyncSheet(e.currentTarget) },
+    h('span', { class: `marker ${mark === MARKERS.both[0] ? 'both' : mark === MARKERS.relay[0] ? 'relay' : 'local'}` }, mark), text);
+  const extra = [];
+  if (state.conflicts.length) extra.push(h('span', { class: 'notice' }, `${state.conflicts.length} change${state.conflicts.length === 1 ? '' : 's'} dropped`));
+  if (state.backup.state === 'needs-permission') extra.push(button('Allow backup', allowBackup, { cls: 'linkish' }));
+  statusLine.replaceChildren(pill, ...extra);
 }
 
-// The trail markers, totalled: what is still to send (○) and in transit (◐).
-function syncSummary() {
+function statusSummary() {
   const s = sync.status;
   const { toSend, inTransit } = state.counts;
-  const retry = (label = 'Retry') => button(label, runSync, { cls: 'linkish' });
-  const totals = [];
-  if (toSend) totals.push(`${toSend} ${MARKERS.local[0]} to send`);
-  if (inTransit) totals.push(`${inTransit} ${MARKERS.relay[0]} in transit`);
-  const summary = totals.length ? totals.join(' · ') : `All ${MARKERS.both[0]}`;
-
   switch (s.state) {
-    case 'signed-out':
-      return h('span', { class: 'sync' }, `${toSend ? `${toSend} ${MARKERS.local[0]} on this device` : `${MARKERS.local[0]} On this device only`}. `,
-        button('Sign in', showSignIn, { cls: 'linkish' }));
-    case 'syncing':
-      return h('span', { class: 'sync' }, s.message || 'Syncing…');
-    case 'alone':
-      return h('span', { class: 'sync', title: 'Nothing is sent until a second device has signed in, so the relay never holds data nobody will collect.' },
-        `${toSend ? `${toSend} ${MARKERS.local[0]} waiting` : 'Ready'}. Sign in on your phone to start syncing.`);
-    case 'ok':
-      return h('span', { class: 'sync', title: `Synced ${ago(s.lastSync)}. Click to sync now.` }, summary, ' ', retry('↻'));
-    case 'error':
-      return h('span', { class: 'notice', title: s.message },
-        s.kind === 'paused' ? 'Relay is paused. Restore it in Supabase. ' : s.kind === 'offline' ? "Can't reach the relay. " : `Sync failed: ${s.message} `,
-        retry());
+    case 'signed-out': return { mark: MARKERS.local[0], text: toSend ? `${toSend} not synced` : 'Not synced', tone: null };
+    case 'syncing': return { mark: MARKERS.relay[0], text: s.message || 'Syncing…', tone: null };
+    case 'alone': return { mark: MARKERS.local[0], text: toSend ? `${toSend} waiting for your phone` : 'Waiting for your phone', tone: null };
+    case 'error': return { mark: MARKERS.local[0], text: s.kind === 'paused' ? 'Relay paused' : s.kind === 'offline' ? 'Offline' : 'Sync failed', tone: s.kind === 'paused' ? 'bad' : 'warn' };
     default:
-      return h('span', { class: 'sync' }, summary);
+      if (toSend) return { mark: MARKERS.local[0], text: `${toSend} to send`, tone: null };
+      if (inTransit) return { mark: MARKERS.relay[0], text: `${inTransit} in transit`, tone: null };
+      return { mark: MARKERS.both[0], text: 'Synced', tone: null };
   }
+}
+
+function showSyncSheet(anchor) {
+  const s = sync.status;
+  const { toSend, inTransit } = state.counts;
+  const lines = [];
+  if (s.state === 'signed-out') lines.push('Not signed in. Entries stay on this device.');
+  else if (s.state === 'alone') lines.push('No other device has signed in yet, so nothing is sent.');
+  else if (s.state === 'error') lines.push(s.message);
+  else lines.push(s.lastSync ? `Last synced ${ago(s.lastSync)}.` : 'Not synced yet.');
+  if (s.others.length) lines.push(`Other device: ${s.others.map((d) => d.name).join(', ')}.`);
+  lines.push(`${toSend} ${MARKERS.local[0]} to send · ${inTransit} ${MARKERS.relay[0]} in transit.`);
+
+  const items = [{ text: lines.join('\n') }];
+  if (state.conflicts.length) {
+    items.push({ divider: true }, { text: state.conflicts.join('\n') },
+      { label: 'Clear these', onSelect: async () => { await store.clearConflicts(); refresh(); } });
+  }
+  items.push({ divider: true });
+  if (s.state === 'signed-out') items.push({ label: 'Sign in', icon: ICONS.user, onSelect: showSignIn });
+  else items.push({ label: 'Sync now', icon: ICONS.sync, onSelect: runSync });
+  if (s.state === 'error' && s.kind === 'paused') items.push({ text: 'Open the Supabase dashboard and restore the project, then sync again.' });
+
+  const b = state.backup;
+  if (b.state !== 'unsupported' && b.state !== 'unknown') {
+    items.push({ divider: true });
+    if (b.state === 'unset') items.push({ label: 'Choose backup folder', icon: ICONS.folder, hint: 'on this Mac', onSelect: chooseBackup });
+    else if (b.state === 'needs-permission') items.push({ label: 'Allow backup', icon: ICONS.folder, hint: b.name, onSelect: allowBackup });
+    else if (b.state === 'running') items.push({ text: 'Backing up…' });
+    else if (b.state === 'error') items.push({ label: 'Backup failed. Retry', icon: ICONS.folder, danger: true, onSelect: runBackup });
+    else items.push({ label: 'Back up now', icon: ICONS.folder, hint: `${b.name} · ${ago(b.last)}`, onSelect: runBackup });
+  }
+  if (state.account) items.push({ divider: true }, { label: `Sign out (${state.account.email})`, icon: ICONS.user, onSelect: signOut });
+  openSheet({ title: 'Sync', anchor, items });
 }
 
 let syncTimer;
@@ -847,19 +1007,6 @@ function runSync() {
 function syncSoon() {
   clearTimeout(syncTimer);
   syncTimer = setTimeout(runSync, 1500);
-}
-
-function backupControl() {
-  const b = state.backup;
-  const link = (label, onclick, title) => button(label, onclick, { cls: 'linkish', title });
-  switch (b.state) {
-    case 'unset': return link('Choose backup folder', chooseBackup, 'Pick a folder on your Mac. Every time you open this panel, your trails are copied there.');
-    case 'needs-permission': return link('Allow backup', allowBackup, `Chrome needs your OK to write to "${b.name}" again.`);
-    case 'running': return h('span', { class: 'backup' }, 'Backing up…');
-    case 'done': return link(`Backed up ${ago(b.last)}`, runBackup, `Folder: ${b.name}. Click to back up now.`);
-    case 'error': return link('Backup failed. Retry', runBackup, b.message);
-    default: return null;
-  }
 }
 
 async function backupOnOpen() {
@@ -884,6 +1031,7 @@ async function runBackup() {
     if (err.name === 'NotAllowedError' || err.name === 'SecurityError') state.backup = await backup.status();
     else if (err.name === 'NotFoundError') state.backup = { state: 'unset' };
     else state.backup = { state: 'error', message: err.message };
+    toast(`Backup failed: ${err.message}`, { bad: true });
   }
   renderStatus();
 }
@@ -892,8 +1040,9 @@ async function chooseBackup() {
   try {
     await backup.chooseFolder();
     await runBackup();
+    toast('Backup folder set. It refreshes every time you open the panel.');
   } catch (err) {
-    if (err.name !== 'AbortError') notice(`Couldn't use that folder: ${err.message}`);
+    if (err.name !== 'AbortError') toast(`Couldn't use that folder: ${err.message}`, { bad: true });
   }
 }
 
@@ -902,7 +1051,7 @@ async function allowBackup() {
     if (await backup.allow()) await runBackup();
     else await backupOnOpen();
   } catch (err) {
-    notice(`Couldn't get permission: ${err.message}`);
+    toast(`Couldn't get permission: ${err.message}`, { bad: true });
   }
 }
 
@@ -910,13 +1059,13 @@ async function allowBackup() {
 
 document.addEventListener('keydown', (e) => {
   if (state.view !== 'trail') return;
-  if (e.target.closest?.('textarea, input')) return;
+  if (e.target.closest?.('textarea, input, .sheet-panel')) return;
   const id = state.selected;
   if (!id) return;
   const trailId = state.trail.id;
   if (e.key === 'Tab') {
     e.preventDefault();
-    if (e.shiftKey) store.outdent(trailId, id); else store.indent(trailId, id);
+    nest(id, e.shiftKey ? -1 : 1);
   } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     e.preventDefault();
     store.shift(trailId, id, e.key === 'ArrowUp' ? -1 : 1);
@@ -957,10 +1106,16 @@ list.addEventListener('scroll', () => {
   state.pinBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 40;
 });
 
+// When the keyboard opens the list shrinks; keep it pinned to the latest entry.
+window.visualViewport?.addEventListener('resize', () => {
+  if (state.view === 'trail' && state.pinBottom) list.scrollTop = list.scrollHeight;
+});
+
 store.onChange((message) => {
   if (message?.type === 'captured') {
     if (state.view === 'trail' && state.trail?.id === message.trailId) refresh({ scroll: 'bottom' });
     else openTrail(message.trailId);
+    store.getTrail(message.trailId).then((t) => { if (t) toast(`Added to “${t.title}”`); });
     syncSoon();
     return;
   }
@@ -988,6 +1143,7 @@ async function start() {
   navigator.storage?.persist?.();
   renderStatus();
   state.account = await auth.current();
+  state.hintsSeen = (await getMeta('hintsSeen')) ?? 0;
   const hash = new URLSearchParams(location.hash.slice(1));
   if (hash.get('type') === 'recovery' && hash.get('access_token')) return showRecovery(hash);
   const active = await store.getActiveTrail();

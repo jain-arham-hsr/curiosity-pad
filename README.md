@@ -59,8 +59,19 @@ The same app, hosted at <https://jain-arham-hsr.github.io/curiosity-pad/>.
 4. From any app, select text or a link, **Share → Curiosity Pad**. It lands in the trail
    you last had open. Images shared the same way arrive as image entries.
 
-Keyboard shortcuts don't exist on a phone; tap an entry and use the buttons that
-appear (Reply, ← → ↑ ↓, Edit, Delete).
+On the phone:
+
+| Gesture | Does |
+|---|---|
+| Tap an entry | Select it: Reply, Edit and a ⋯ menu appear |
+| Long-press | All actions: reply, nest, un-nest, move up/down, edit, copy, delete |
+| Swipe right | Nest under the entry above |
+| Swipe left | Un-nest |
+| Pull down at the top | Sync |
+
+The pill in the status line shows sync state (`○` to send · `◐` in transit · `●` synced);
+tap it for details, Sync now, backup and sign in/out. The `?` on the trails list explains
+all of this in the app.
 
 Every push to `main` redeploys the site (`.github/workflows/pages.yml`). GitHub Pages
 has to be switched on once: **Settings → Pages → Source: GitHub Actions**.

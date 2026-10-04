@@ -152,6 +152,10 @@ extension/
     export.js        pure: trail → markdown / json, file naming
     backup.js        File System Access mirror into the chosen folder
     media.js         image compression (WebP ≤1600px), Opus voice recording at 24 kbps
+    sheet.js         one menu component: bottom sheet on touch, popover on desktop
+    gestures.js      touch swipe (nest/un-nest) and long-press; contextmenu is the
+                     long-press signal because Chrome cancels the pointer on a hold
+    player.js        compact voice-note player over a hidden <audio>
     platform.js      the only extension-specific calls the UI makes
     util.js          ids, slugs, time formatting
 tests/               node --test (pure modules only)
