@@ -3,6 +3,12 @@
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js', { type: 'module' }).catch((err) => console.error('SW failed', err));
+  // A new version has taken over: reload right away if the app only just
+  // opened, otherwise leave it for the next launch rather than interrupt.
+  const openedAt = Date.now();
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (navigator.serviceWorker.controller && Date.now() - openedAt < 20000) location.reload();
+  });
 }
 
 if (location.search.includes('shared=1')) {

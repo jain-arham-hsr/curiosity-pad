@@ -206,9 +206,12 @@ function renderTrailsBar() {
 }
 
 function renderTrailList(trails) {
-  const account = state.account
-    ? h('p', { class: 'account' }, `Signed in as ${state.account.email}. `, button('Sign out', signOut, { cls: 'linkish' }))
-    : h('p', { class: 'account' }, 'Not syncing. ', button('Sign in', showSignIn, { cls: 'linkish' }), ' to reach your phone.');
+  const version = document.querySelector('meta[name="version"]')?.content;
+  const account = h('p', { class: 'account' },
+    ...(state.account
+      ? [`Signed in as ${state.account.email}. `, button('Sign out', signOut, { cls: 'linkish' })]
+      : ['Not syncing. ', button('Sign in', showSignIn, { cls: 'linkish' }), ' to reach your phone.']),
+    version ? h('span', { class: 'version' }, ` · v${version}`) : null);
   if (!trails.length) {
     const other = sync.status.others[0];
     const restore = state.account && other

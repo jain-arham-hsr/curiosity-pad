@@ -9,5 +9,5 @@ cp -R web/. _site/
 cp -R extension/app _site/app
 cp web/icons/*.png _site/icons/
 VERSION="${1:-$(git rev-parse --short HEAD 2>/dev/null || date +%s)}"
-sed -i.bak "s/__VERSION__/$VERSION/" _site/sw.js && rm _site/sw.js.bak
+for f in _site/sw.js _site/index.html; do sed -i.bak "s/__VERSION__/$VERSION/" "$f" && rm "$f.bak"; done
 echo "built _site/ (version $VERSION)"
