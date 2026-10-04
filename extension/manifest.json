@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Curiosity Pad",
+  "version": "0.1.0",
+  "description": "Question Trails: capture the path you took to understand something.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Open Curiosity Pad",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "sidePanel",
+    "contextMenus",
+    "scripting",
+    "activeTab",
+    "unlimitedStorage"
+  ]
+}

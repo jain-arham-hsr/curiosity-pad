@@ -1,0 +1,10 @@
+{
+  "name": "curiosity-pad",
+  "private": true,
+  "type": "module",
+  "description": "Question Trails: capture the path you took to understand something.",
+  "scripts": {
+    "test": "node --test tests/",
+    "icons": "node scripts/make-icons.mjs"
+  }
+}
