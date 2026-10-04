@@ -175,8 +175,25 @@ scripts/make-icons.mjs   draws the ◐ toolbar icon with no dependencies
 
 1. **Chrome extension, local only, plus backup-on-open.** ← built
 2. **Supabase relay, sync, trail markers live, status line counts and warnings.** ← built
-3. Android PWA (public repo, GitHub Pages), share-sheet capture, persistent storage,
-   password-reset landing, restore-from-other-device.
+3. **Android PWA on GitHub Pages, share-sheet capture, password-reset landing,
+   restore-from-other-device.** ← built
+
+### Phone app (step 3) notes
+
+- `web/` holds only what is phone-specific: `index.html`, `manifest.webmanifest`
+  (with `share_target`), `sw.js`, `pwa.js`, icons. `scripts/build-web.sh` assembles
+  `_site/` = `web/` + `extension/app/`, stamping the git sha into `sw.js` so each
+  deploy gets a fresh cache. The workflow deploys `_site/` to Pages on every push.
+- The service worker is a module so it can import `store.js` directly: a share-sheet
+  POST to `./share` is stored into IndexedDB by the worker itself, then redirects to
+  the app. Links that arrive in `text` instead of `url` are recognised.
+- **Restore.** An empty, signed-in device that can see another device offers "Restore
+  from <device>". That sends a `restore.request` op. The other device, on its next
+  sync, answers with a snapshot (every trail and node as create ops, media uploaded)
+  addressed to the requester only, bypassing its outbox. Remote creates skip ids that
+  already exist, so a partial local copy is harmless. Restored entries show `●`.
+- Repo is public (`jain-arham-hsr/curiosity-pad`); the only "secret" in it is the
+  publishable key, which is meant to be public.
 
 ## 7. Testing
 

@@ -47,6 +47,24 @@ After changing any code, click the reload arrow on the extension's card.
   The status line totals them ("2 ○ to send · 1 ◐ in transit", or "All ●") and says
   so plainly if the relay is unreachable or paused. Click ↻ to sync now.
 
+## Phone (Android)
+
+The same app, hosted at <https://jain-arham-hsr.github.io/curiosity-pad/>.
+
+1. Open that URL in Chrome on the phone. From the ⋮ menu choose **Add to Home screen**
+   (or **Install app**).
+2. Open it from the home screen and **Sign in** once.
+3. On the first empty start, tap **Restore from Chrome extension on Mac** to pull
+   everything the Mac has. Then open the side panel on the Mac; it sends on its next sync.
+4. From any app, select text or a link, **Share → Curiosity Pad**. It lands in the trail
+   you last had open. Images shared the same way arrive as image entries.
+
+Keyboard shortcuts don't exist on a phone; tap an entry and use the buttons that
+appear (Reply, ← → ↑ ↓, Edit, Delete).
+
+Every push to `main` redeploys the site (`.github/workflows/pages.yml`). GitHub Pages
+has to be switched on once: **Settings → Pages → Source: GitHub Actions**.
+
 ## Supabase setup (once)
 
 1. Create a free project. In **SQL Editor**, run `supabase/schema.sql`, then
@@ -55,7 +73,8 @@ After changing any code, click the reload arrow on the extension's card.
    Email**: turn off *Allow new users to sign up*.
 3. Put the project URL and publishable key in `extension/app/config.js`.
 4. For password reset emails to work, set **Authentication → URL Configuration → Site
-   URL** to the hosted phone app (step 3).
+   URL** to `https://jain-arham-hsr.github.io/curiosity-pad/`. The reset link opens
+   the phone app, which shows the new-password screen.
 
 ## Develop
 
