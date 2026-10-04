@@ -112,8 +112,9 @@ function snippet(node) {
   return node.kind === 'image' ? 'Image' : 'Voice note';
 }
 
-function notice(message) {
+function notice(message, kind = 'error') {
   state.notice = message;
+  state.noticeKind = kind;
   renderStatus();
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => { state.notice = ''; renderStatus(); }, 8000);
@@ -304,7 +305,7 @@ function showRecovery(params) {
 
 async function requestRestore() {
   await store.requestRestore();
-  notice('Asked your other device. Open Curiosity Pad there; it will send everything on its next sync.');
+  notice('Asked your other device. Open Curiosity Pad there; it will send everything on its next sync.', 'info');
   runSync();
 }
 
@@ -777,7 +778,7 @@ function cancelRecording() {
 // ---- status line: trail markers + backup ----------------------------------
 
 function renderStatus() {
-  const left = state.notice ? h('span', { class: 'notice' }, state.notice) : syncSummary();
+  const left = state.notice ? h('span', { class: state.noticeKind === 'info' ? 'info' : 'notice' }, state.notice) : syncSummary();
   const conflict = state.conflicts.length
     ? h('div', { class: 'conflicts' }, state.conflicts.at(-1),
       state.conflicts.length > 1 ? ` (+${state.conflicts.length - 1} more)` : '', ' ',

@@ -83,6 +83,7 @@ textarea:focus, input[type="text"]:focus { border-color: var(--accent); }
 }
 .status-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .notice { color: var(--danger); }
+.info { color: var(--accent); }
 .conflicts { margin-top: 4px; color: var(--danger); }
 .flag { margin-top: 6px; font-size: 11px; color: var(--danger); }
 .account { margin: 16px 4px; font-size: 12px; color: var(--muted); text-align: center; }
