@@ -711,29 +711,49 @@ async function primaryAction() {
   return startRecording();
 }
 
-function afterSend(id, parentId) {
-  refs.textarea.value = '';
-  autosize();
-  state.replyTo = null;
-  renderChips();
-  updatePrimary();
-  return refresh({ scroll: parentId ? id : 'bottom' });
+// Pull what the other device sent before showing a new entry, so nothing
+// pops in above it a moment later. Capped so a slow network can't hold the
+// entry back for long; offline or signed out, there is nothing to wait for.
+function settleFirst() {
+  if (!state.account || !navigator.onLine) return Promise.resolve();
+  return Promise.race([runSync(), new Promise((r) => setTimeout(r, 2500))]);
 }
 
-async function send() {
-  const text = refs.textarea.value.trim();
+// Sends run one after another, so quick successive entries keep their order.
+let sendChain = Promise.resolve();
+function enqueueSend(trailId, entry) {
   const parentId = state.replyTo;
-  let id;
+  state.replyTo = null;
+  renderChips();
+  sendChain = sendChain
+    .then(settleFirst)
+    .then(async () => {
+      if (!state.trail || state.trail.id !== trailId) { await store.addNode(trailId, { ...entry, parentId }); return; }
+      const id = await store.addNode(trailId, { ...entry, parentId });
+      await refresh({ scroll: parentId ? id : 'bottom' });
+    })
+    .catch((err) => notice(`Couldn't add that: ${err.message}`));
+  return sendChain;
+}
+
+function clearComposer() {
+  refs.textarea.value = '';
+  autosize();
+  updatePrimary();
+}
+
+function send() {
+  const text = refs.textarea.value.trim();
+  const trailId = state.trail.id;
   if (state.pendingImage) {
     const { blob } = state.pendingImage;
-    id = await store.addNode(state.trail.id, { kind: 'image', blob, caption: text, parentId });
     clearPendingImage();
-  } else if (text) {
-    id = await store.addNode(state.trail.id, { kind: 'text', body: text, parentId });
-  } else {
-    return;
+    clearComposer();
+    return enqueueSend(trailId, { kind: 'image', blob, caption: text });
   }
-  await afterSend(id, parentId);
+  if (!text) return Promise.resolve();
+  clearComposer();
+  return enqueueSend(trailId, { kind: 'text', body: text });
 }
 
 async function startRecording() {
@@ -760,11 +780,10 @@ async function finishRecording() {
   clearInterval(recordingTimer);
   state.recorder = null;
   const { blob, duration } = await recorder.stop();
-  const parentId = state.replyTo;
-  const id = await store.addNode(state.trail.id, {
-    kind: 'audio', blob, duration, caption: refs.textarea.value.trim(), parentId,
-  });
-  await afterSend(id, parentId);
+  const caption = refs.textarea.value.trim();
+  const trailId = state.trail.id;
+  clearComposer();
+  await enqueueSend(trailId, { kind: 'audio', blob, duration, caption });
 }
 
 function cancelRecording() {
