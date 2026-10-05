@@ -37,3 +37,22 @@ end;
 $$;
 
 grant execute on function public.ack_ops(uuid[], uuid) to authenticated;
+
+-- Signs a device out of the relay: drops it, stops waiting on it, and throws
+-- away whatever was only ever meant for it. Used to enforce the two-device limit.
+create or replace function public.remove_device(p_id uuid)
+returns void
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  delete from public.devices where id = p_id and user_id = auth.uid();
+  update public.ops set pending_for = array_remove(pending_for, p_id)
+    where user_id = auth.uid() and p_id = any(pending_for);
+  delete from public.ops where user_id = auth.uid() and pending_for = '{}';
+  delete from public.receipts where user_id = auth.uid() and to_device = p_id;
+end;
+$$;
+
+grant execute on function public.remove_device(uuid) to authenticated;

@@ -13,6 +13,7 @@ import { hasExtension, openMicSetup } from './platform.js';
 import { openSheet, closeSheet, coarse } from './sheet.js';
 import { attachGestures } from './gestures.js';
 import { createPlayer } from './player.js';
+import { renderMarkdown, stripMarkdown } from './markdown.js';
 import { getMeta, setMeta } from './db.js';
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +44,8 @@ const state = {
   conflicts: [],
   hintsSeen: 3, // first-use tip shows while < 3
   showDone: false,
+  fresh: null, // { title } while a new trail exists only on screen
+  query: '',
 };
 
 const refs = {};
@@ -81,6 +84,8 @@ const ICONS = {
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>', 2),
   check: svg('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.2),
   undo: svg('<path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>', 2.2),
+  search: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
 };
 // The app icon, simplified: a spiral pad with a question mark.
 const PAD_GLYPH = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="28" fill="#0f211d"/>
@@ -143,7 +148,7 @@ const hostOf = (url) => {
 function snippet(node) {
   if (!node) return '';
   const text = node.kind === 'text' ? node.body : node.caption;
-  if (text) return text.replace(/\s+/g, ' ').slice(0, 80);
+  if (text) return stripMarkdown(text).slice(0, 80);
   return node.kind === 'image' ? 'Image' : 'Voice note';
 }
 
@@ -174,12 +179,13 @@ function toast(message, { bad = false, ms = 2800 } = {}) {
 function openLightbox(src, caption) {
   closeSheet();
   const img = h('img', { src, alt: caption || 'Image' });
-  const box = h('div', { class: 'lightbox' }, img,
+  const inner = h('div', { class: 'lightbox-inner' }, img);
+  const box = h('div', { class: 'lightbox' }, inner,
     iconButton('close', 'Close', () => box.remove(), 'lightbox-close'),
     caption ? h('div', { class: 'lightbox-caption' }, caption) : null);
   const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); box.remove(); } };
   document.addEventListener('keydown', onKey);
-  box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
+  box.addEventListener('click', (e) => { if (e.target === box || e.target === inner) box.remove(); });
   img.addEventListener('click', (e) => {
     e.stopPropagation();
     const zoomed = box.classList.toggle('zoomed');
@@ -231,9 +237,36 @@ async function showTrails() {
   state.view = 'trails';
   state.trail = null;
   state.nodes = [];
+  state.fresh = null;
   renderComposer();
+  renderSearch();
   await refresh();
 }
+
+// A new trail that exists only on screen until it gets a title or an entry.
+function newTrail() {
+  resetTrailState();
+  revokeMedia();
+  state.view = 'trail';
+  state.trail = null;
+  state.nodes = [];
+  state.fresh = { title: '' };
+  searchBar.hidden = true;
+  renderComposer();
+  renderTrailBar();
+  renderNodes();
+  renderStatus();
+  bar.querySelector('input')?.focus();
+}
+
+async function createDraftTrail(title) {
+  const id = await store.createTrail(title);
+  state.fresh = null;
+  await openTrail(id);
+  return id;
+}
+
+const firstLine = (text) => (text ?? '').split('\n').map((l) => stripMarkdown(l)).find(Boolean)?.slice(0, 80) || 'Untitled';
 
 async function openTrail(id) {
   const trail = await store.getTrail(id);
@@ -248,6 +281,8 @@ async function openTrail(id) {
   }
   state.view = 'trail';
   state.trail = trail;
+  state.fresh = null;
+  searchBar.hidden = true;
   await store.setActiveTrail(id);
   renderComposer();
   await refresh({ scroll: 'bottom' });
@@ -261,11 +296,19 @@ async function refresh({ scroll } = {}) {
     renderStatus();
     return;
   }
+  if (state.view === 'trail' && state.fresh) {
+    renderTrailBar();
+    renderNodes();
+    renderChips();
+    renderStatus();
+    return;
+  }
   if (state.view === 'trails') {
     const trails = await store.listTrails();
+    const nodes = state.query.trim() ? (await store.everything()).nodes : [];
     if (state.view !== 'trails') return;
     renderTrailsBar();
-    renderTrailList(trails);
+    renderTrailList(trails, nodes);
   } else {
     const trail = await store.getTrail(state.trail.id);
     if (!trail) return showTrails();
@@ -292,10 +335,68 @@ function scheduleRefresh() {
 // ---- trails list ----------------------------------------------------------
 
 function renderTrailsBar() {
-  bar.replaceChildren(h('h1', {}, h('span', { class: 'brand', html: PAD_GLYPH }), 'Curiosity Pad'), iconButton('help', 'How to use', (e) => showHelp(e.currentTarget)));
+  bar.replaceChildren(h('h1', {}, h('span', { class: 'brand', html: PAD_GLYPH }), 'Curiosity Pad'),
+    iconButton('plus', 'New trail', newTrail),
+    iconButton('help', 'How to use', (e) => showHelp(e.currentTarget)));
 }
 
-function renderTrailList(trails) {
+// The search field lives outside #list so re-renders don't steal its focus.
+const searchBar = h('div', { id: 'search', hidden: true });
+list.before(searchBar);
+let searchTimer;
+function renderSearch() {
+  searchBar.hidden = false;
+  if (searchBar.firstChild) return;
+  const input = h('input', { type: 'search', placeholder: 'Search trails and entries', 'aria-label': 'Search' });
+  input.addEventListener('input', () => {
+    state.query = input.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => refresh(), 120);
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { input.value = ''; state.query = ''; refresh(); } });
+  searchBar.append(h('span', { class: 'search-icon', html: ICONS.search }), input);
+}
+
+const nodeText = (n) => stripMarkdown(n.kind === 'text' ? n.body : (n.caption ?? ''));
+
+// Every word must appear somewhere in the trail: its title or any entry.
+function searchTrails(trails, nodes, query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return trails.map((t) => ({ trail: t, hits: [] }));
+  const byTrail = new Map();
+  for (const n of nodes) {
+    const text = nodeText(n);
+    if (!text) continue;
+    if (!byTrail.has(n.trailId)) byTrail.set(n.trailId, []);
+    byTrail.get(n.trailId).push({ node: n, text, lower: text.toLowerCase() });
+  }
+  const out = [];
+  for (const trail of trails) {
+    const title = trail.title.toLowerCase();
+    const entries = byTrail.get(trail.id) ?? [];
+    const ok = words.every((w) => title.includes(w) || entries.some((e) => e.lower.includes(w)));
+    if (!ok) continue;
+    const hits = entries.filter((e) => words.some((w) => e.lower.includes(w))).slice(0, 3)
+      .map((e) => ({ node: e.node, snippet: excerpt(e.text, words) }));
+    out.push({ trail, hits });
+  }
+  return out;
+}
+
+function excerpt(text, words) {
+  const lower = text.toLowerCase();
+  const at = Math.min(...words.map((w) => lower.indexOf(w)).filter((i) => i >= 0));
+  const start = Math.max(0, at - 40);
+  return (start ? '…' : '') + text.slice(start, start + 110) + (start + 110 < text.length ? '…' : '');
+}
+
+async function openEntry(trailId, nodeId) {
+  await openTrail(trailId);
+  select(nodeId);
+  list.querySelector(`[data-id="${nodeId}"]`)?.scrollIntoView({ block: 'center' });
+}
+
+function renderTrailList(trails, nodes = []) {
   const version = document.querySelector('meta[name="version"]')?.content;
   const account = h('p', { class: 'account' },
     ...(state.account
@@ -312,19 +413,24 @@ function renderTrailList(trails) {
       h('span', {}, 'No Question Trails yet. Start one below with the question you are chasing.')), ...[restore, account].filter(Boolean));
     return;
   }
-  const card = (t) => h('button', { class: `trail${t.done ? ' done' : ''}`, type: 'button', onclick: () => openTrail(t.id) },
-    h('span', { class: 'trail-title' }, t.done ? h('span', { class: 'tick', html: ICONS.check }) : null, t.title),
-    h('span', { class: 'trail-meta' }, h('span', { class: 'count' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'}`),
-      t.done ? `completed ${shortDate(t.done)}` : shortDate(t.updated)));
-  const active = trails.filter((t) => !t.done);
-  const done = trails.filter((t) => t.done).sort((a, b) => b.done - a.done);
+  const results = searchTrails(trails, nodes, state.query);
+  const card = ({ trail: t, hits }) => h('div', { class: `trail${t.done ? ' done' : ''}` },
+    h('button', { class: 'trail-main', type: 'button', onclick: () => openTrail(t.id) },
+      h('span', { class: 'trail-title' }, t.done ? h('span', { class: 'tick', html: ICONS.check }) : null, t.title),
+      h('span', { class: 'trail-meta' }, h('span', { class: 'count' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'}`),
+        t.done ? `completed ${shortDate(t.done)}` : shortDate(t.updated))),
+    ...hits.map((hit) => h('button', { class: 'hit', type: 'button', onclick: () => openEntry(t.id, hit.node.id) }, hit.snippet)));
+  const searching = !!state.query.trim();
+  const active = results.filter((r) => !r.trail.done);
+  const done = results.filter((r) => r.trail.done).sort((a, b) => b.trail.done - a.trail.done);
   const parts = active.map(card);
   if (done.length) {
-    parts.push(h('button', { class: 'section', type: 'button', onclick: () => { state.showDone = !state.showDone; renderTrailList(trails); } },
-      h('span', { class: 'chev', html: state.showDone ? ICONS.down : ICONS.up }), `Completed (${done.length})`));
-    if (state.showDone) parts.push(...done.map(card));
+    parts.push(h('button', { class: 'section', type: 'button', onclick: () => { state.showDone = !state.showDone; renderTrailList(trails, nodes); } },
+      h('span', { class: 'chev', html: state.showDone || searching ? ICONS.down : ICONS.up }), `Completed (${done.length})`));
+    if (state.showDone || searching) parts.push(...done.map(card));
   }
-  list.replaceChildren(...parts, account);
+  if (searching && !results.length) parts.push(h('p', { class: 'empty small' }, 'Nothing matches.'));
+  list.replaceChildren(...parts, ...(searching ? [] : [account]));
 }
 
 function showHelp(anchor) {
@@ -340,6 +446,8 @@ function showHelp(anchor) {
         : 'Click an entry to select it.\nTab / Shift+Tab nest and un-nest · Alt+↑↓ move · R reply · E edit · Delete removes.\nDrag an entry onto another: top edge = before, bottom = after, middle = inside.' },
       { divider: true },
       { text: `${MARKERS.local[0]}  ${MARKERS.local[1]}\n${MARKERS.relay[0]}  ${MARKERS.relay[1]}\n${MARKERS.both[0]}  ${MARKERS.both[1]}` },
+      { divider: true },
+      { text: 'Entries take Markdown: **bold**, `code`, lists, > quotes, ```fenced code```, and TeX maths as $x^2$ or $$…$$ on its own lines. Shift+Enter adds a line.' },
     ],
   });
 }
@@ -353,6 +461,7 @@ function field(type, placeholder, autocomplete) {
 function showSignIn() {
   resetTrailState();
   state.view = 'signin';
+  searchBar.hidden = true;
   bar.replaceChildren(iconButton('back', 'Back', showTrails), h('h1', {}, 'Sign in'));
   composer.replaceChildren();
   const email = field('email', 'Email', 'username');
@@ -395,6 +504,7 @@ async function forgotPassword(email, result) {
 // Reached from the reset email: the tokens are in the URL fragment.
 function showRecovery(params) {
   state.view = 'recover';
+  searchBar.hidden = true;
   bar.replaceChildren(h('h1', {}, 'New password'));
   composer.replaceChildren();
   const password = field('password', 'New password', 'new-password');
@@ -440,6 +550,17 @@ async function signOut() {
 
 function renderTrailBar() {
   if (state.renaming) return; // keep the rename field alive
+  if (state.fresh) {
+    const input = h('input', { type: 'text', class: 'rename', placeholder: 'What are you trying to understand?', 'aria-label': 'Trail title' });
+    input.value = state.fresh.title;
+    input.addEventListener('input', () => { state.fresh.title = input.value; });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); createDraftTrail(input.value.trim()); }
+      if (e.key === 'Escape') showTrails();
+    });
+    bar.replaceChildren(iconButton('back', 'All Question Trails', showTrails), input);
+    return;
+  }
   const trail = state.trail;
   bar.replaceChildren(
     iconButton('back', 'All Question Trails', showTrails),
@@ -504,7 +625,9 @@ function renderNodes(scroll) {
   const rows = flatten(state.nodes);
   if (!rows.length) {
     list.replaceChildren(h('div', { class: 'empty' }, h('span', { class: 'glyph', html: PAD_GLYPH }),
-      h('span', {}, 'Nothing here yet. Write what you want to understand, and add each new question as it comes up.')));
+      h('span', {}, state.fresh
+        ? 'Give it a title above, or just send the first question. The trail is created the moment you do.'
+        : 'Nothing here yet. Write what you want to understand, and add each new question as it comes up.')));
   } else {
     list.replaceChildren(...rows.map(nodeRow), ...[tip(rows.length)].filter(Boolean));
   }
@@ -645,7 +768,7 @@ function content(node) {
   if (text) {
     const long = text.length > 600 || text.split('\n').length > 10;
     const open = state.expanded.has(node.id);
-    parts.push(h('div', { class: `text${long && !open ? ' clamp' : ''}` }, ...linkify(text)));
+    parts.push(h('div', { class: `text${long && !open ? ' clamp' : ''}` }, renderMarkdown(text)));
     if (long) {
       parts.push(button(open ? 'Show less' : 'Show more', () => {
         if (open) state.expanded.delete(node.id); else state.expanded.add(node.id);
@@ -793,17 +916,11 @@ function renderComposer() {
   for (const key of Object.keys(refs)) delete refs[key];
 
   if (state.view === 'trails') {
-    const input = h('input', { type: 'text', placeholder: 'Start a new Question Trail…', 'aria-label': 'New trail' });
-    const start = async () => {
-      const title = input.value.trim();
-      if (!title) return;
-      input.value = '';
-      await openTrail(await store.createTrail(title));
-    };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') start(); });
-    composer.replaceChildren(h('div', { class: 'compose-row' }, input, button('Start', start, { cls: 'primary' })));
+    composer.replaceChildren();
+    composer.hidden = true;
     return;
   }
+  composer.hidden = false;
 
   const fileInput = h('input', { type: 'file', accept: 'image/*', hidden: true });
   fileInput.addEventListener('change', () => {
@@ -926,8 +1043,12 @@ function enqueueSend(trailId, entry) {
   sendChain = sendChain
     .then(settleFirst)
     .then(async () => {
-      if (!state.trail || state.trail.id !== trailId) { await store.addNode(trailId, { ...entry, parentId }); return; }
-      const id = await store.addNode(trailId, { ...entry, parentId });
+      let tid = trailId;
+      if (!tid) { // draft: the first entry (or the typed title) creates the trail
+        tid = await createDraftTrail(state.fresh?.title.trim() || firstLine(entry.body || entry.caption));
+      }
+      if (!state.trail || state.trail.id !== tid) { await store.addNode(tid, { ...entry, parentId }); return; }
+      const id = await store.addNode(tid, { ...entry, parentId });
       await refresh({ scroll: parentId ? id : 'bottom' });
     })
     .catch((err) => toast(`Couldn't add that: ${err.message}`, { bad: true }));
@@ -942,7 +1063,7 @@ function clearComposer() {
 
 function send() {
   const text = refs.textarea.value.trim();
-  const trailId = state.trail.id;
+  const trailId = state.trail?.id ?? null;
   if (state.pendingImage) {
     const { blob } = state.pendingImage;
     clearPendingImage();
@@ -979,7 +1100,7 @@ async function finishRecording() {
   state.recorder = null;
   const { blob, duration } = await recorder.stop();
   const caption = refs.textarea.value.trim();
-  const trailId = state.trail.id;
+  const trailId = state.trail?.id ?? null;
   clearComposer();
   await enqueueSend(trailId, { kind: 'audio', blob, duration, caption });
 }
@@ -1015,6 +1136,7 @@ function statusSummary() {
     case 'signed-out': return { mark: MARKERS.local[0], text: toSend ? `${toSend} not synced` : 'Not synced', tone: null };
     case 'syncing': return { mark: MARKERS.relay[0], text: s.message || 'Syncing…', tone: null };
     case 'alone': return { mark: MARKERS.local[0], text: toSend ? `${toSend} waiting for your phone` : 'Waiting for your phone', tone: null };
+    case 'devices': return { mark: MARKERS.local[0], text: 'Too many devices', tone: 'warn' };
     case 'error': return { mark: MARKERS.local[0], text: s.kind === 'paused' ? 'Relay paused' : s.kind === 'offline' ? 'Offline' : 'Sync failed', tone: s.kind === 'paused' ? 'bad' : 'warn' };
     default:
       if (toSend) return { mark: MARKERS.local[0], text: `${toSend} to send`, tone: null };
@@ -1028,10 +1150,11 @@ function showSyncSheet(anchor) {
   const { toSend, inTransit } = state.counts;
   const lines = [];
   if (s.state === 'signed-out') lines.push('Not signed in. Entries stay on this device.');
+  else if (s.state === 'devices') lines.push(`This account is already signed in on ${sync.MAX_DEVICES} devices. Sign one of them out to use this one.`);
   else if (s.state === 'alone') lines.push('No other device has signed in yet, so nothing is sent.');
   else if (s.state === 'error') lines.push(s.message);
   else lines.push(s.lastSync ? `Last synced ${ago(s.lastSync)}.` : 'Not synced yet.');
-  if (s.others.length) lines.push(`Other device: ${s.others.map((d) => d.name).join(', ')}.`);
+  if (s.others.length && s.state !== 'devices') lines.push(`Other device: ${s.others.map((d) => d.name).join(', ')}.`);
   lines.push(`${toSend} ${MARKERS.local[0]} to send · ${inTransit} ${MARKERS.relay[0]} in transit.`);
 
   const items = [{ text: lines.join('\n') }];
@@ -1041,7 +1164,13 @@ function showSyncSheet(anchor) {
   }
   items.push({ divider: true });
   if (s.state === 'signed-out') items.push({ label: 'Sign in', icon: ICONS.user, onSelect: showSignIn });
-  else items.push({ label: 'Sync now', icon: ICONS.sync, onSelect: runSync });
+  else if (s.state === 'devices') {
+    for (const d of s.others) {
+      items.push({ label: `Sign out ${d.name}`, icon: ICONS.user, danger: true, hint: `last seen ${ago(Date.parse(d.last_seen))}`,
+        confirm: `Sign out ${d.name}? It keeps its local copy but stops syncing.`,
+        onSelect: async () => { try { await sync.removeDevice(d.id); toast(`${d.name} signed out`); runSync(); } catch (err) { toast(err.message, { bad: true }); } } });
+    }
+  } else items.push({ label: 'Sync now', icon: ICONS.sync, onSelect: runSync });
   if (s.state === 'error' && s.kind === 'paused') items.push({ text: 'Open the Supabase dashboard and restore the project, then sync again.' });
 
   const b = state.backup;
@@ -1116,7 +1245,7 @@ async function allowBackup() {
 // ---- keyboard, drag-in files, wiring --------------------------------------
 
 document.addEventListener('keydown', (e) => {
-  if (state.view !== 'trail') return;
+  if (state.view !== 'trail' || state.fresh) return;
   if (e.target.closest?.('textarea, input, .sheet-panel')) return;
   const id = state.selected;
   if (!id) return;

@@ -24,8 +24,8 @@ present them. Writing the actual note stays manual, in Typst, as before.
 
 ## 2. Principles (firm)
 
-- **Specific and minimal.** No tags, no search, no AI, no transcription. Add a feature
-  only when its absence actually hurts.
+- **Specific and minimal.** No tags, no AI, no transcription. Add a feature only when its
+  absence actually hurts (search, Markdown and maths earned their place that way).
 - **Content can't change once sent; structure always can.** A sent entry changes only
   through an explicit Edit, which shows "edited". Where an entry sits (order, nesting)
   can be changed freely at any time. In data terms: `body`/`caption` are edited
@@ -81,6 +81,10 @@ Phone PWA (full offline copy) ──▶ Supabase (relay only) ◀── Chrome e
   leaves receipts, removes the device from `pending_for`, deletes fully-delivered ops
   and returns their ids so the caller deletes the media. RLS limits everything to the
   signed-in user; there is exactly one user and signups are disabled.
+- **Device limit.** At most two devices may be registered at once (`MAX_DEVICES` in
+  `sync.js`, enforced at registration). A third gets status `devices` and a sheet to sign
+  one of the others out via `remove_device()` in `functions.sql`, which also drops the
+  ops that were only pending for it.
 - **Auth.** One Supabase email/password user. The session (refresh token) lives in
   IndexedDB, so each device signs in once. Password reset emails link to the hosted
   PWA (`#type=recovery`), which shows the new-password screen; the link cannot land
@@ -171,6 +175,8 @@ extension/
     gestures.js      touch swipe (nest/un-nest) and long-press; contextmenu is the
                      long-press signal because Chrome cancels the pointer on a hold
     player.js        compact voice-note player over a hidden <audio>
+    markdown.js      Markdown → DOM (no innerHTML from user text); TeX via vendor/temml
+  vendor/            Temml (MIT) for TeX → MathML; Chrome renders MathML natively
     platform.js      the only extension-specific calls the UI makes
     util.js          ids, slugs, time formatting
 tests/               node --test (pure modules only)

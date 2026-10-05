@@ -18,10 +18,17 @@ After changing any code, click the reload arrow on the extension's card.
 
 ## Use
 
-- **Start a trail.** Type the question you're chasing and press Enter.
-- **Add entries.** Type and press Enter (Shift+Enter for a new line). Paste or drop an
-  image, or use the image button; anything you type goes with it as the caption. With
-  the box empty, the button on the right records a voice note.
+- **Start a trail.** Press **+** in the header. Give it a title, or just send the first
+  question: the trail is created the moment you do. Back out with nothing and nothing
+  is created.
+- **Add entries.** Type and press Enter (Shift+Enter for a new line). Entries take
+  Markdown (`**bold**`, `` `code` ``, lists, `>` quotes, fenced code blocks with a copy
+  button) and TeX maths (`$x^2$` inline, `$$…$$` on its own lines). Paste or drop an
+  image, or use the image button; anything you type goes with it as the caption. Tap an
+  image to view it full-screen; tap again to zoom. With the box empty, the button on the
+  right records a voice note.
+- **Search.** The field above the list matches trail titles and entry text; entry hits
+  show as snippets and open the trail at that entry.
 - **Capture from any page.** Select text, right-click, then **Add to Question Trail**.
   It lands in the trail you last had open, with a link back to the page.
 - **Shape the trail.** Click an entry to select it, then:
@@ -42,7 +49,8 @@ After changing any code, click the reload arrow on the extension's card.
   outline), `trail.json` and `media/`. If Chrome asks again after a restart, click
   **Allow backup**.
 - **Sync.** Once per device, tap **Sign in** in the status line. The app stays signed
-  in. Nothing is sent until a second device has signed in too.
+  in. Nothing is sent until a second device has signed in too. At most two devices can
+  be signed in at once; a third is offered the option to sign one of the others out.
 - **Markers.** `○` only on this device · `◐` reached the relay · `●` on both devices.
   The status line totals them ("2 ○ to send · 1 ◐ in transit", or "All ●") and says
   so plainly if the relay is unreachable or paused. Click ↻ to sync now.
@@ -79,7 +87,7 @@ has to be switched on once: **Settings → Pages → Source: GitHub Actions**.
 ## Supabase setup (once)
 
 1. Create a free project. In **SQL Editor**, run `supabase/schema.sql`, then
-   `supabase/functions.sql`.
+   `supabase/functions.sql` (re-run the latter after updates; it is idempotent).
 2. **Authentication → Users → Add user** (auto-confirm). Then **Sign In / Providers →
    Email**: turn off *Allow new users to sign up*.
 3. Put the project URL and publishable key in `extension/app/config.js`.

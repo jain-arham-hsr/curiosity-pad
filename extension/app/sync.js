@@ -61,16 +61,30 @@ async function run() {
   } catch (err) {
     console.error('Sync failed', err);
     const kind = err instanceof RelayError ? err.kind : 'request';
-    set({ state: kind === 'auth' ? 'signed-out' : 'error', kind, message: err.message, lastSync: await getMeta('lastSync') });
+    set({ state: kind === 'auth' ? 'signed-out' : kind === 'devices' ? 'devices' : 'error', kind, message: err.message, others: err.devices ?? status.others, lastSync: await getMeta('lastSync') });
     return null;
   }
 }
 
+// At most this many devices may be signed in at once. A new device beyond
+// that is refused until one of the others is signed out.
+export const MAX_DEVICES = 2;
+
 async function register(me) {
+  const before = await rest.select('devices', 'select=id,name,last_seen');
+  const known = before.some((d) => d.id === me);
+  const others = before.filter((d) => d.id !== me);
+  if (!known && others.length >= MAX_DEVICES) {
+    const err = new RelayError('devices', `Already signed in on ${others.length} devices. Sign one of them out first.`);
+    err.devices = others;
+    throw err;
+  }
   await rest.insert('devices', [{ id: me, name: deviceName(), last_seen: new Date().toISOString() }], { onConflict: 'id', merge: true });
-  const devices = await rest.select('devices', 'select=id,name,last_seen');
-  return devices.filter((d) => d.id !== me);
+  return others;
 }
+
+// Sign another device out of the relay (see remove_device in functions.sql).
+export const removeDevice = (id) => rest.rpc('remove_device', { p_id: id });
 
 // Returns the devices that asked for a full restore during this pull.
 async function pull(me) {
