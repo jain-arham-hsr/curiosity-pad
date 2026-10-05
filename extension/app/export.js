@@ -39,6 +39,7 @@ function nodeMarkdown(node) {
 
 export function trailToMarkdown(trail, nodes) {
   const lines = [`# ${trail.title}`, ''];
+  if (trail.done) lines.push(`_Completed ${new Date(trail.done).toISOString().slice(0, 10)}_`, '');
   for (const { node, depth } of flatten(nodes)) {
     const pad = '  '.repeat(depth);
     const [first, ...rest] = nodeMarkdown(node).split('\n');

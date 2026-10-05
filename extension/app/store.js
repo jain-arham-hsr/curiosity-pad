@@ -8,7 +8,7 @@
 //   trail.create { id, title }          node.create { id, trailId, parentId, pos, kind, ... }
 //   trail.rename { id, title }          node.move   { id, parentId, pos }
 //   trail.delete { id }                 node.edit   { id, body?, caption? }
-//                                       node.delete { id }
+//   trail.done   { id, done }           node.delete { id }
 //
 // Trail markers on a node (node.sync): 'local' = this device only,
 // 'relay' = reached the relay, 'both' = on the other device too. node.op is
@@ -62,8 +62,13 @@ async function applyOp(s, op, { remote = false } = {}) {
   switch (op.type) {
     case 'trail.create':
       if (remote && (await wait(s.trails.get(d.id)))) break;
-      await wait(s.trails.put({ id: d.id, title: d.title, created: op.at, updated: op.at }));
+      await wait(s.trails.put({ id: d.id, title: d.title, created: op.at, updated: op.at, done: d.done ?? null }));
       break;
+    case 'trail.done': {
+      const trail = await wait(s.trails.get(d.id));
+      if (trail) await wait(s.trails.put({ ...trail, done: d.done ? op.at : null, updated: op.at }));
+      break;
+    }
     case 'trail.rename': {
       const trail = await wait(s.trails.get(d.id));
       if (trail) await wait(s.trails.put({ ...trail, title: d.title, updated: op.at }));
@@ -170,7 +175,7 @@ export async function applyRemote(ops, mediaList = []) {
           conflicts.push(`A ${op.type === 'node.edit' ? 'edit' : 'move'} was dropped: the entry was deleted on your other device.`);
           await wait(s.outbox.delete(op.seq));
         }
-      } else if (op.type === 'trail.rename' && (await wait(s.trails.get(op.data.id)))) {
+      } else if ((op.type === 'trail.rename' || op.type === 'trail.done') && (await wait(s.trails.get(op.data.id)))) {
         await applyOp(s, op);
       }
     }
@@ -220,7 +225,7 @@ export const requestRestore = () => commit([{ type: 'restore.request', data: {} 
 export async function snapshotOps() {
   const { trails, nodes } = await everything();
   const device = await deviceId();
-  const ops = trails.map((t) => ({ id: uid(), at: t.created, device, type: 'trail.create', data: { id: t.id, title: t.title } }));
+  const ops = trails.map((t) => ({ id: uid(), at: t.created, device, type: 'trail.create', data: { id: t.id, title: t.title, done: t.done ?? null } }));
   for (const n of nodes) {
     const { sync, flag, op, trailId, created, edited, ...data } = n;
     ops.push({ id: n.op ?? uid(), at: created, device, type: 'node.create', data: { ...data, trailId } });
@@ -311,6 +316,10 @@ export const renameTrail = (id, title) =>
   commit([{ type: 'trail.rename', data: { id, title } }], { trailId: id });
 
 export const deleteTrail = (id) => commit([{ type: 'trail.delete', data: { id } }], { trailId: id });
+
+// A trail is complete when its question has a satisfying answer. It stays
+// readable and editable; it just moves out of the way.
+export const setTrailDone = (id, done) => commit([{ type: 'trail.done', data: { id, done: !!done } }], { trailId: id });
 
 export async function addNode(trailId, {
   parentId = null, kind = 'text', body = '', caption = '', blob = null, duration = null, source = null,

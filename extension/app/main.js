@@ -42,6 +42,7 @@ const state = {
   counts: { toSend: 0, inTransit: 0 },
   conflicts: [],
   hintsSeen: 3, // first-use tip shows while < 3
+  showDone: false,
 };
 
 const refs = {};
@@ -78,6 +79,8 @@ const ICONS = {
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   pencil: svg('<path d="M4 20h4l10-10-4-4L4 16v4z"/>', 1.6),
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>', 2),
+  check: svg('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.2),
+  undo: svg('<path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>'),
 };
 // The app icon, simplified: a spiral pad with a question mark.
 const PAD_GLYPH = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="28" fill="#0f211d"/>
@@ -309,9 +312,19 @@ function renderTrailList(trails) {
       h('span', {}, 'No Question Trails yet. Start one below with the question you are chasing.')), ...[restore, account].filter(Boolean));
     return;
   }
-  list.replaceChildren(...trails.map((t) => h('button', { class: 'trail', type: 'button', onclick: () => openTrail(t.id) },
-    h('span', { class: 'trail-title' }, t.title),
-    h('span', { class: 'trail-meta' }, h('span', { class: 'count' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'}`), shortDate(t.updated)))), account);
+  const card = (t) => h('button', { class: `trail${t.done ? ' done' : ''}`, type: 'button', onclick: () => openTrail(t.id) },
+    h('span', { class: 'trail-title' }, t.done ? h('span', { class: 'tick', html: ICONS.check }) : null, t.title),
+    h('span', { class: 'trail-meta' }, h('span', { class: 'count' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'}`),
+      t.done ? `completed ${shortDate(t.done)}` : shortDate(t.updated)));
+  const active = trails.filter((t) => !t.done);
+  const done = trails.filter((t) => t.done).sort((a, b) => b.done - a.done);
+  const parts = active.map(card);
+  if (done.length) {
+    parts.push(h('button', { class: 'section', type: 'button', onclick: () => { state.showDone = !state.showDone; renderTrailList(trails); } },
+      h('span', { class: 'chev', html: state.showDone ? ICONS.down : ICONS.up }), `Completed (${done.length})`));
+    if (state.showDone) parts.push(...done.map(card));
+  }
+  list.replaceChildren(...parts, account);
 }
 
 function showHelp(anchor) {
@@ -430,7 +443,9 @@ function renderTrailBar() {
   const trail = state.trail;
   bar.replaceChildren(
     iconButton('back', 'All Question Trails', showTrails),
-    h('h1', { class: 'title', title: 'Rename', onclick: startRename }, trail.title, h('span', { class: 'pencil', html: ICONS.pencil })),
+    h('h1', { class: `title${trail.done ? ' done' : ''}`, title: 'Rename', onclick: startRename },
+      trail.done ? h('span', { class: 'tick', html: ICONS.check, title: `Completed ${shortDate(trail.done)}` }) : null,
+      trail.title, h('span', { class: 'pencil', html: ICONS.pencil })),
     iconButton('more', 'Trail menu', (e) => showTrailMenu(e.currentTarget)),
   );
 }
@@ -443,6 +458,9 @@ function showTrailMenu(anchor) {
     items: [
       { label: 'Rename', icon: ICONS.pencil, onSelect: startRename },
       { label: 'Copy as outline', icon: ICONS.copy, hint: 'Markdown', onSelect: () => copyText(trailToMarkdown(trail, state.nodes), 'Outline copied') },
+      trail.done
+        ? { label: 'Reopen', icon: ICONS.undo, hint: `completed ${shortDate(trail.done)}`, onSelect: () => store.setTrailDone(trail.id, false).then(() => toast('Reopened')) }
+        : { label: 'Mark as complete', icon: ICONS.check, onSelect: () => store.setTrailDone(trail.id, true).then(() => toast('Marked complete. Find it under “Completed” in the list.')) },
       { divider: true },
       { label: 'Delete trail', icon: ICONS.trash, danger: true, confirm: 'Delete this trail and everything in it?', onSelect: deleteTrail },
     ],

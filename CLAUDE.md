@@ -185,7 +185,9 @@ scripts/make-icons.mjs   draws the ◐ toolbar icon with no dependencies
 - **Ordering:** siblings are sorted by `pos` (a float). A position between two
   neighbours is their midpoint. Deleting an entry keeps its replies; they move up into
   its slot.
-- **Outbox:** every op (`trail.create/rename/delete`, `node.create/move/edit/delete`),
+- **Trail.done** is a timestamp (or null). Completing a trail is the `trail.done` op; it
+  syncs and backs up like any change and the trail stays editable.
+- **Outbox:** every op (`trail.create/rename/delete/done`, `node.create/move/edit/delete`),
   stamped with id, time and device. It is written in the same transaction as the
   change itself. Step 2 drains it to the relay. Until then it only grows; it holds
   small JSON only, never media blobs.
