@@ -41,7 +41,8 @@ export function deviceName() {
   const ua = navigator.userAgent;
   const os = /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'Device';
   const app = typeof chrome !== 'undefined' && chrome.runtime?.id ? 'Chrome extension' : 'App';
-  return `${app} on ${os}`;
+  if (os === 'Android') return 'Phone (Android app)';
+  return `${os} (${app})`;
 }
 
 async function run() {

@@ -44,7 +44,7 @@ const state = {
   counts: { toSend: 0, inTransit: 0 },
   conflicts: [],
   hintsSeen: 3, // first-use tip shows while < 3
-  showDone: false,
+  tab: 'active', // trails list: 'active' | 'done'
   fresh: null, // { title } while a new trail exists only on screen
   query: '',
 };
@@ -425,14 +425,22 @@ function renderTrailList(trails, nodes = []) {
   const searching = !!state.query.trim();
   const active = results.filter((r) => !r.trail.done);
   const done = results.filter((r) => r.trail.done).sort((a, b) => b.trail.done - a.trail.done);
-  const parts = active.map(card);
-  if (done.length) {
-    parts.push(h('button', { class: 'section', type: 'button', onclick: () => { state.showDone = !state.showDone; renderTrailList(trails, nodes); } },
-      h('span', { class: 'chev', html: state.showDone || searching ? ICONS.down : ICONS.up }), `Completed (${done.length})`));
-    if (state.showDone || searching) parts.push(...done.map(card));
+  const doneTotal = trails.filter((t) => t.done).length;
+  const tab = (key, label, count) => h('button', {
+    class: `tab${state.tab === key ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': state.tab === key ? 'true' : 'false',
+    onclick: () => { state.tab = key; renderTrailList(trails, nodes); },
+  }, label, count ? h('span', { class: 'tab-count' }, String(count)) : null);
+  const tabs = h('div', { class: 'tabs', role: 'tablist' },
+    tab('active', 'Active', searching ? active.length : trails.length - doneTotal),
+    tab('done', 'Completed', searching ? done.length : doneTotal));
+  const shown = state.tab === 'done' ? done : active;
+  const parts = shown.map(card);
+  if (!shown.length) {
+    parts.push(h('p', { class: 'empty small' }, searching ? 'Nothing matches.' : state.tab === 'done'
+      ? 'Nothing completed yet. When a trail has its answer, mark it complete from its ⋯ menu.'
+      : 'No active trails. Press + to start one.'));
   }
-  if (searching && !results.length) parts.push(h('p', { class: 'empty small' }, 'Nothing matches.'));
-  list.replaceChildren(...parts, ...(searching ? [] : [account]));
+  list.replaceChildren(tabs, ...parts, ...(searching ? [] : [account]));
 }
 
 function showHelp(anchor) {
@@ -583,7 +591,7 @@ function showTrailMenu(anchor) {
       { label: 'Copy as outline', icon: ICONS.copy, hint: 'Markdown', onSelect: () => copyText(trailToMarkdown(trail, state.nodes), 'Outline copied') },
       trail.done
         ? { label: 'Reopen', icon: ICONS.undo, hint: `completed ${shortDate(trail.done)}`, onSelect: () => store.setTrailDone(trail.id, false).then(() => toast('Reopened')) }
-        : { label: 'Mark as complete', icon: ICONS.check, onSelect: () => store.setTrailDone(trail.id, true).then(() => toast('Marked complete. Find it under “Completed” in the list.')) },
+        : { label: 'Mark as complete', icon: ICONS.check, onSelect: () => store.setTrailDone(trail.id, true).then(() => toast('Marked complete. It is now under the Completed tab.')) },
       { divider: true },
       { label: 'Delete trail', icon: ICONS.trash, danger: true, confirm: 'Delete this trail and everything in it?', onSelect: deleteTrail },
     ],
@@ -790,10 +798,13 @@ function meta(node) {
   const marker = coarse()
     ? button(mark, () => toast(label), { cls: `marker ${sync}`, title: label })
     : h('span', { class: `marker ${sync}`, title: label, 'aria-label': label }, mark);
-  return h('div', { class: 'meta-wrap' }, flag, h('div', { class: 'meta' },
-    node.source?.url
-      ? h('a', { class: 'source', href: node.source.url, target: '_blank', rel: 'noreferrer', title: node.source.title || node.source.url }, hostOf(node.source.url))
-      : null,
+  const src = node.source?.url
+    ? h('a', { class: 'source', href: node.source.url, target: '_blank', rel: 'noreferrer', title: node.source.url },
+      h('span', { class: 'source-icon', html: ICONS.link }),
+      h('span', { class: 'source-title' }, node.source.title?.trim() || node.source.url),
+      node.source.title?.trim() ? h('span', { class: 'source-host' }, hostOf(node.source.url)) : null)
+    : null;
+  return h('div', { class: 'meta-wrap' }, flag, src, h('div', { class: 'meta' },
     h('span', { title: new Date(node.created).toLocaleString() }, stamp(node.created)),
     node.edited ? h('span', { class: 'edited', title: `Edited ${new Date(node.edited).toLocaleString()}` }, 'edited') : null,
     marker));
@@ -1153,18 +1164,28 @@ function renderStatus() {
   statusLine.replaceChildren(pill, ...extra);
 }
 
+// Plain words for a device: "your phone", "your Mac".
+function deviceLabel(d) {
+  const n = d?.name ?? '';
+  if (/Android|iPhone|iOS|Phone/i.test(n)) return 'your phone';
+  if (/Mac/i.test(n)) return /extension/i.test(n) ? 'your Mac' : 'the app on your Mac';
+  if (/Windows|Linux/i.test(n)) return 'your computer';
+  return n || 'your other device';
+}
+const othersLabel = (others) => (others.length === 1 ? deviceLabel(others[0]) : 'your other devices');
+
 function statusSummary() {
   const s = sync.status;
   const { toSend, inTransit } = state.counts;
   switch (s.state) {
-    case 'signed-out': return { mark: MARKERS.local[0], text: toSend ? `${toSend} not synced` : 'Not synced', tone: null };
+    case 'signed-out': return { mark: MARKERS.local[0], text: toSend ? `${toSend} only here` : 'Not syncing', tone: null };
     case 'syncing': return { mark: MARKERS.relay[0], text: s.message || 'Syncing…', tone: null };
-    case 'alone': return { mark: MARKERS.local[0], text: toSend ? `${toSend} waiting for your phone` : 'Waiting for your phone', tone: null };
+    case 'alone': return { mark: MARKERS.local[0], text: 'No other device yet', tone: null };
     case 'devices': return { mark: MARKERS.local[0], text: 'Too many devices', tone: 'warn' };
     case 'error': return { mark: MARKERS.local[0], text: s.kind === 'paused' ? 'Relay paused' : s.kind === 'offline' ? 'Offline' : 'Sync failed', tone: s.kind === 'paused' ? 'bad' : 'warn' };
     default:
       if (toSend) return { mark: MARKERS.local[0], text: `${toSend} to send`, tone: null };
-      if (inTransit) return { mark: MARKERS.relay[0], text: `${inTransit} in transit`, tone: null };
+      if (inTransit) return { mark: MARKERS.relay[0], text: `${inTransit} waiting for ${othersLabel(s.others)}`, tone: null };
       return { mark: MARKERS.both[0], text: 'Synced', tone: null };
   }
 }
@@ -1172,41 +1193,57 @@ function statusSummary() {
 function showSyncSheet(anchor) {
   const s = sync.status;
   const { toSend, inTransit } = state.counts;
+  const items = [];
+  const plural = (n, word) => `${n} ${n === 1 ? word : word.endsWith('y') ? `${word.slice(0, -1)}ies` : `${word}s`}`;
+
+  // 1. where things stand, in sentences
   const lines = [];
   if (s.state === 'signed-out') lines.push('Not signed in. Entries stay on this device.');
   else if (s.state === 'devices') lines.push(`This account is already signed in on ${sync.MAX_DEVICES} devices. Sign one of them out to use this one.`);
-  else if (s.state === 'alone') lines.push('No other device has signed in yet, so nothing is sent.');
-  else if (s.state === 'error') lines.push(s.message);
-  else lines.push(s.lastSync ? `Last synced ${ago(s.lastSync)}.` : 'Not synced yet.');
-  if (s.others.length && s.state !== 'devices') lines.push(`Other device: ${s.others.map((d) => d.name).join(', ')}.`);
-  lines.push(`${toSend} ${MARKERS.local[0]} to send · ${inTransit} ${MARKERS.relay[0]} in transit.`);
+  else if (s.state === 'alone') lines.push('No other device has signed in yet, so nothing is sent. Sign in on your phone to start syncing.');
+  else if (s.state === 'error') lines.push(s.kind === 'paused' ? 'The relay is paused. Restore the project in the Supabase dashboard, then sync again.' : s.message);
+  else lines.push(s.lastSync ? `Synced ${ago(s.lastSync)}.` : 'Not synced yet.');
+  if (s.state === 'ok' || s.state === 'alone') {
+    if (toSend) lines.push(`${plural(toSend, 'change')} not sent yet; they go on the next sync.`);
+    if (inTransit) lines.push(`${plural(inTransit, 'entry')} on the relay, waiting for ${othersLabel(s.others)} to open the app.`);
+    if (!toSend && !inTransit && s.state === 'ok') lines.push('Everything is on both devices.');
+  }
+  items.push({ text: lines.join('\n') });
 
-  const items = [{ text: lines.join('\n') }];
+  // 2. the devices, with when they were last seen (which is why something is "waiting")
+  if (s.state !== 'signed-out') {
+    items.push({ divider: true }, { text: `This device: ${sync.deviceName()}` });
+    for (const d of s.others) {
+      const seen = d.last_seen ? `seen ${ago(Date.parse(d.last_seen))}` : '';
+      if (s.state === 'devices') {
+        items.push({ label: `Sign out ${d.name}`, icon: ICONS.user, danger: true, hint: seen,
+          confirm: `Sign out ${d.name}? It keeps its local copy but stops syncing.`,
+          onSelect: async () => { try { await sync.removeDevice(d.id); toast(`${d.name} signed out`); runSync(); } catch (err) { toast(err.message, { bad: true }); } } });
+      } else {
+        items.push({ label: d.name, icon: ICONS.user, hint: seen,
+          confirm: `Remove ${d.name} from this account? It keeps its local copy but stops syncing. For a device you no longer use.`,
+          onSelect: async () => { try { await sync.removeDevice(d.id); toast(`${d.name} removed`); runSync(); } catch (err) { toast(err.message, { bad: true }); } } });
+      }
+    }
+  }
+
+  // 3. actions
+  items.push({ divider: true });
+  if (s.state === 'signed-out') items.push({ label: 'Sign in', icon: ICONS.user, onSelect: showSignIn });
+  else if (s.state !== 'devices') items.push({ label: 'Sync now', icon: ICONS.sync, onSelect: runSync });
   if (state.conflicts.length) {
     items.push({ divider: true }, { text: state.conflicts.join('\n') },
       { label: 'Clear these', onSelect: async () => { await store.clearConflicts(); refresh(); } });
   }
-  items.push({ divider: true });
-  if (s.state === 'signed-out') items.push({ label: 'Sign in', icon: ICONS.user, onSelect: showSignIn });
-  else if (s.state === 'devices') {
-    for (const d of s.others) {
-      items.push({ label: `Sign out ${d.name}`, icon: ICONS.user, danger: true, hint: `last seen ${ago(Date.parse(d.last_seen))}`,
-        confirm: `Sign out ${d.name}? It keeps its local copy but stops syncing.`,
-        onSelect: async () => { try { await sync.removeDevice(d.id); toast(`${d.name} signed out`); runSync(); } catch (err) { toast(err.message, { bad: true }); } } });
-    }
-  } else items.push({ label: 'Sync now', icon: ICONS.sync, onSelect: runSync });
-  if (s.state === 'error' && s.kind === 'paused') items.push({ text: 'Open the Supabase dashboard and restore the project, then sync again.' });
-
   const b = state.backup;
   if (b.state !== 'unsupported' && b.state !== 'unknown') {
     items.push({ divider: true });
-    if (b.state === 'unset') items.push({ label: 'Choose backup folder', icon: ICONS.folder, hint: 'on this Mac', onSelect: chooseBackup });
+    if (b.state === 'unset') items.push({ label: 'Choose backup folder', icon: ICONS.folder, hint: 'on this computer', onSelect: chooseBackup });
     else if (b.state === 'needs-permission') items.push({ label: 'Allow backup', icon: ICONS.folder, hint: b.name, onSelect: allowBackup });
     else if (b.state === 'running') items.push({ text: 'Backing up…' });
     else if (b.state === 'error') items.push({ label: 'Backup failed. Retry', icon: ICONS.folder, danger: true, onSelect: runBackup });
     else items.push({ label: 'Back up now', icon: ICONS.folder, hint: `${b.name} · ${ago(b.last)}`, onSelect: runBackup });
   }
-  if (state.account) items.push({ divider: true }, { label: `Sign out (${state.account.email})`, icon: ICONS.user, onSelect: signOut });
   openSheet({ title: 'Sync', anchor, items });
 }
 

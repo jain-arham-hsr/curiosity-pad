@@ -213,9 +213,12 @@ textarea:focus, input[type="text"]:focus { border-color: var(--accent); }
 .trail.done .trail-title { color: var(--muted); }
 .tick { display: inline-grid; width: 18px; height: 18px; margin-right: 6px; vertical-align: -4px; color: var(--accent); }
 .tick svg { width: 18px; height: 18px; }
-.section { display: flex; align-items: center; gap: 6px; width: 100%; margin: 10px 0 8px; padding: 6px 4px; font-size: 12px; font-weight: 600; color: var(--muted); text-align: left; }
-.section .chev { display: inline-grid; width: 16px; height: 16px; }
-.section .chev svg { width: 16px; height: 16px; }
+.tabs { display: flex; gap: 4px; margin: 0 0 10px; padding: 3px; background: var(--selected); border-radius: 999px; }
+.tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; font-size: 13px; font-weight: 560; color: var(--muted); border-radius: 999px; }
+.tab:hover { background: transparent; color: var(--text); }
+.tab.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.tab-count { padding: 0 7px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--selected); border-radius: 999px; }
+.tab.on .tab-count { background: var(--bg); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .empty .glyph { width: 56px; height: 56px; opacity: 0.55; border-radius: 14px; overflow: hidden; }
 .empty .glyph svg { width: 56px; height: 56px; display: block; }
@@ -354,14 +357,29 @@ audio { display: block; width: 100%; height: 36px; margin-bottom: 4px; }
   font-size: 10.5px;
   color: var(--muted);
 }
-.meta .source {
-  margin-right: auto;
-  max-width: 55%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.source {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
   color: var(--muted);
+  text-decoration: none;
 }
+.source:hover .source-title { color: var(--accent); text-decoration: underline; }
+.source-icon { display: inline-grid; flex: none; width: 13px; height: 13px; align-self: center; }
+.source-icon svg { width: 13px; height: 13px; }
+.source-title {
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.source-host { flex: none; white-space: nowrap; }
 .marker { font-size: 11px; line-height: 1; }
 .marker.local { color: var(--muted); }
 .marker.relay { color: var(--accent); opacity: 0.55; }
@@ -424,7 +442,7 @@ button.marker { padding: 0 2px; }
   .card .text { font-size: 17px; line-height: 1.4; }
   .card.question .text { font-size: 17.5px; }
   .meta { margin-top: 3px; font-size: 10.5px; gap: 7px; }
-  .meta .source { font-size: 10.5px; }
+  .source { font-size: 12.5px; }
   .marker { font-size: 11px; }
   .player .time { font-size: 10.5px; }
   .trail { padding: 12px 14px; }
