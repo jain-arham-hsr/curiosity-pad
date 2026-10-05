@@ -9,7 +9,7 @@ import { compressImage, Recorder } from './media.js';
 import { flatten, isWithin } from './tree.js';
 import { trailToMarkdown } from './export.js';
 import { ago, formatDuration, shortDate, stamp } from './util.js';
-import { hasExtension, openMicSetup } from './platform.js';
+import { hasExtension, openMicSetup, currentPage } from './platform.js';
 import { openSheet, closeSheet, coarse } from './sheet.js';
 import { attachGestures } from './gestures.js';
 import { createPlayer } from './player.js';
@@ -34,6 +34,7 @@ const state = {
   renaming: false,
   expanded: new Set(),
   pendingImage: null, // { blob, url }
+  pendingSource: null, // { url, title } to attach to the next entry
   recorder: null,
   dragId: null,
   pinBottom: true,
@@ -85,6 +86,7 @@ const ICONS = {
   check: svg('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.2),
   undo: svg('<path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>', 2.2),
+  link: svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.5 1.5M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.5-1.5"/>'),
   search: svg('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>'),
 };
 // The app icon, simplified: a spiral pad with a question mark.
@@ -951,6 +953,7 @@ function renderComposer() {
     refs.chips,
     h('div', { class: 'compose-row' },
       iconButton('image', 'Add an image (or paste / drop one)', () => fileInput.click(), 'round'),
+      hasExtension ? iconButton('link', 'Attach the current page as the source', attachCurrentPage, 'round') : null,
       area,
       primary),
     fileInput,
@@ -968,7 +971,7 @@ function autosize() {
 
 function updatePrimary() {
   if (!refs.primary) return;
-  const sending = state.recorder || state.pendingImage || refs.textarea.value.trim();
+  const sending = state.recorder || state.pendingImage || state.pendingSource || refs.textarea.value.trim();
   refs.primary.innerHTML = sending ? ICONS.send : ICONS.mic;
   const label = state.recorder ? 'Send voice note' : sending ? 'Send (Enter)' : 'Record a voice note';
   refs.primary.title = label;
@@ -984,6 +987,13 @@ function renderChips() {
       h('span', { class: 'chip-label' }, '↳ Replying to'),
       h('span', { class: 'chip-text' }, snippet(target)),
       button('×', () => { state.replyTo = null; renderChips(); }, { cls: 'ghost', title: 'Cancel reply' })));
+  }
+  if (state.pendingSource) {
+    const src = state.pendingSource;
+    chips.push(h('div', { class: 'chip' },
+      h('span', { class: 'chip-label' }, '🔗 Source'),
+      h('span', { class: 'chip-text', title: src.url }, src.title || hostOf(src.url)),
+      button('×', () => { state.pendingSource = null; renderChips(); updatePrimary(); }, { cls: 'ghost', title: 'Remove source' })));
   }
   if (state.pendingImage) {
     chips.push(h('div', { class: 'chip' },
@@ -1013,6 +1023,15 @@ async function setPendingImage(file) {
   }
 }
 
+async function attachCurrentPage() {
+  const page = await currentPage();
+  if (!page) { toast('No web page is open in this window', { bad: true }); return; }
+  state.pendingSource = page;
+  renderChips();
+  updatePrimary();
+  refs.textarea?.focus();
+}
+
 function clearPendingImage() {
   if (state.pendingImage) URL.revokeObjectURL(state.pendingImage.url);
   state.pendingImage = null;
@@ -1022,7 +1041,7 @@ function clearPendingImage() {
 
 async function primaryAction() {
   if (state.recorder) return finishRecording();
-  if (state.pendingImage || refs.textarea.value.trim()) return send();
+  if (state.pendingImage || state.pendingSource || refs.textarea.value.trim()) return send();
   return startRecording();
 }
 
@@ -1057,6 +1076,8 @@ function enqueueSend(trailId, entry) {
 
 function clearComposer() {
   refs.textarea.value = '';
+  state.pendingSource = null;
+  renderChips();
   autosize();
   updatePrimary();
 }
@@ -1064,15 +1085,17 @@ function clearComposer() {
 function send() {
   const text = refs.textarea.value.trim();
   const trailId = state.trail?.id ?? null;
+  const source = state.pendingSource;
   if (state.pendingImage) {
     const { blob } = state.pendingImage;
     clearPendingImage();
     clearComposer();
-    return enqueueSend(trailId, { kind: 'image', blob, caption: text });
+    return enqueueSend(trailId, { kind: 'image', blob, caption: text, source });
   }
-  if (!text) return Promise.resolve();
+  const body = text || (source ? (source.title || source.url) : '');
+  if (!body) return Promise.resolve();
   clearComposer();
-  return enqueueSend(trailId, { kind: 'text', body: text });
+  return enqueueSend(trailId, { kind: 'text', body, source });
 }
 
 async function startRecording() {
@@ -1101,8 +1124,9 @@ async function finishRecording() {
   const { blob, duration } = await recorder.stop();
   const caption = refs.textarea.value.trim();
   const trailId = state.trail?.id ?? null;
+  const source = state.pendingSource;
   clearComposer();
-  await enqueueSend(trailId, { kind: 'audio', blob, duration, caption });
+  await enqueueSend(trailId, { kind: 'audio', blob, duration, caption, source });
 }
 
 function cancelRecording() {

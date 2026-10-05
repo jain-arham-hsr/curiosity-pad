@@ -8,3 +8,11 @@ export const hasExtension = typeof chrome !== 'undefined' && !!chrome.runtime?.i
 export function openMicSetup() {
   if (hasExtension) chrome.tabs.create({ url: chrome.runtime.getURL('mic.html') });
 }
+
+// The page the user is reading: the active tab of the window the panel is in.
+export async function currentPage() {
+  if (!hasExtension) return null;
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab?.url || !/^https?:/.test(tab.url)) return null;
+  return { url: tab.url, title: tab.title ?? '' };
+}

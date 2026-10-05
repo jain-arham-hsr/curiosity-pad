@@ -30,7 +30,9 @@ After changing any code, click the reload arrow on the extension's card.
 - **Search.** The field above the list matches trail titles and entry text; entry hits
   show as snippets and open the trail at that entry.
 - **Capture from any page.** Select text, right-click, then **Add to Question Trail**.
-  It lands in the trail you last had open, with a link back to the page.
+  It lands in the trail you last had open, with a link back to the page. Or press the
+  🔗 button in the composer to attach the page you're reading to your next entry (send
+  with an empty box and the page title becomes the entry).
 - **Shape the trail.** Click an entry to select it, then:
 
   | Key | Does |
