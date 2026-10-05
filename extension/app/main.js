@@ -77,6 +77,7 @@ const ICONS = {
   folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>'),
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   pencil: svg('<path d="M4 20h4l10-10-4-4L4 16v4z"/>', 1.6),
+  close: svg('<path d="M6 6l12 12M18 6L6 18"/>', 2),
 };
 // The app icon, simplified: a spiral pad with a question mark.
 const PAD_GLYPH = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="28" fill="#0f211d"/>
@@ -163,6 +164,34 @@ function toast(message, { bad = false, ms = 2800 } = {}) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+// Full-screen preview of an image. Tap the image to zoom 2x (then scroll to
+// pan), tap the backdrop or press Escape to close.
+function openLightbox(src, caption) {
+  closeSheet();
+  const img = h('img', { src, alt: caption || 'Image' });
+  const box = h('div', { class: 'lightbox' }, img,
+    iconButton('close', 'Close', () => box.remove(), 'lightbox-close'),
+    caption ? h('div', { class: 'lightbox-caption' }, caption) : null);
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); box.remove(); } };
+  document.addEventListener('keydown', onKey);
+  box.addEventListener('click', (e) => { if (e.target === box) box.remove(); });
+  img.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const zoomed = box.classList.toggle('zoomed');
+    if (zoomed) {
+      // keep the tapped point under the finger
+      const rx = e.offsetX / img.clientWidth, ry = e.offsetY / img.clientHeight;
+      requestAnimationFrame(() => {
+        box.scrollLeft = rx * img.clientWidth - box.clientWidth / 2;
+        box.scrollTop = ry * img.clientHeight - box.clientHeight / 2;
+      });
+    }
+  });
+  const observer = new MutationObserver(() => { if (!box.isConnected) { document.removeEventListener('keydown', onKey); observer.disconnect(); } });
+  observer.observe(document.body, { childList: true });
+  document.body.append(box);
 }
 
 async function copyText(text, what = 'Copied') {
@@ -518,7 +547,7 @@ function nodeRow({ node, depth }) {
   selected && !editing ? actions(node) : null);
 
   card.addEventListener('click', (e) => {
-    if (e.target.closest('a, button, textarea, input, .player')) return;
+    if (e.target.closest('a, button, textarea, input, .player, img.media')) return;
     select(selected ? null : node.id);
   });
   card.addEventListener('dragstart', (e) => {
@@ -583,7 +612,12 @@ function clearDropMarks(only) {
 
 function content(node) {
   const parts = [];
-  if (node.kind === 'image') parts.push(h('img', { class: 'media', alt: node.caption || 'Image', dataset: { media: node.mediaId } }));
+  if (node.kind === 'image') {
+    parts.push(h('img', {
+      class: 'media', alt: node.caption || 'Image', dataset: { media: node.mediaId }, title: 'Tap to enlarge',
+      onclick: (e) => { e.stopPropagation(); openLightbox(e.currentTarget.src, node.caption); },
+    }));
+  }
   if (node.kind === 'audio') {
     const player = createPlayer({ duration: node.duration ?? 0, key: node.mediaId });
     player.dataset.media = node.mediaId;
