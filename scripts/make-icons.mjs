@@ -6,6 +6,7 @@
 // assets/icon.svg           the full art (rounded tile)         → 48, 128, 192, 512
 // assets/icon-small.svg     fewer, bolder coils for tiny sizes  → 16, 32
 // assets/icon-maskable.svg  art at 72 % on a solid square       → 512 maskable
+// assets/icon-plain*.svg    the pad alone, transparent          → extension 16–128, favicon
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
@@ -74,18 +75,25 @@ const defs = `<defs>
   <linearGradient id="wire" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a9b74"/><stop offset="1" stop-color="#1f7a5c"/></linearGradient>
 </defs>`;
 
-function svg(body, { rounded = true } = {}) {
-  const tile = rounded ? `<rect width="128" height="128" rx="28" fill="url(#night)"/>` : `<rect width="128" height="128" fill="#0f211d"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">${defs}${tile}${starField()}${body}</svg>\n`;
+// `tile`: 'rounded' (the app icon), 'square' (maskable), or 'none' (just the pad on
+// transparent, for the toolbar and favicon where a starry sky is only noise).
+function svg(body, { tile = 'rounded' } = {}) {
+  const back = tile === 'rounded' ? `<rect width="128" height="128" rx="28" fill="url(#night)"/>${starField()}`
+    : tile === 'square' ? `<rect width="128" height="128" fill="#0f211d"/>${starField()}` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">${defs}${back}${body}</svg>\n`;
 }
 
 const full = pad({ coilCount: 7, wire: 2.4, qScale: 0.82 });
 const small = pad({ coilCount: 4, wire: 3.2, qScale: 0.95 });
+// The pad alone, scaled up to fill the frame.
+const fill = (art) => `<g transform="translate(64 64) scale(1.34) translate(-64 -66)">${art}</g>`;
 const icons = {
   'icon.svg': svg(full),
   'icon-small.svg': svg(small),
   // Maskable: launchers crop into circles/squircles, so keep the art inside the safe zone.
-  'icon-maskable.svg': svg(`<g transform="translate(64 64) scale(0.72) translate(-64 -64)">${full}</g>`, { rounded: false }),
+  'icon-maskable.svg': svg(`<g transform="translate(64 64) scale(0.72) translate(-64 -64)">${full}</g>`, { tile: 'square' }),
+  'icon-plain.svg': svg(fill(full), { tile: 'none' }),
+  'icon-plain-small.svg': svg(fill(small), { tile: 'none' }),
 };
 
 mkdirSync(join(root, 'assets'), { recursive: true });
@@ -95,10 +103,11 @@ console.log('assets:', Object.keys(icons).join(', '));
 // ---- rasterise -------------------------------------------------------------
 
 const targets = [
-  ['icon-small.svg', 16, 'extension/icons/16.png'],
-  ['icon-small.svg', 32, 'extension/icons/32.png'],
-  ['icon.svg', 48, 'extension/icons/48.png'],
-  ['icon.svg', 128, 'extension/icons/128.png'],
+  ['icon-plain-small.svg', 16, 'extension/icons/16.png'],
+  ['icon-plain-small.svg', 32, 'extension/icons/32.png'],
+  ['icon-plain.svg', 48, 'extension/icons/48.png'],
+  ['icon-plain.svg', 128, 'extension/icons/128.png'],
+  ['icon-plain.svg', 64, 'web/icons/favicon.png'],
   ['icon.svg', 192, 'web/icons/192.png'],
   ['icon.svg', 512, 'web/icons/512.png'],
   ['icon-maskable.svg', 512, 'web/icons/512-maskable.png'],
