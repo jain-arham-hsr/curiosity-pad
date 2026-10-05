@@ -585,7 +585,7 @@ function content(node) {
   const parts = [];
   if (node.kind === 'image') parts.push(h('img', { class: 'media', alt: node.caption || 'Image', dataset: { media: node.mediaId } }));
   if (node.kind === 'audio') {
-    const player = createPlayer({ duration: node.duration ?? 0 });
+    const player = createPlayer({ duration: node.duration ?? 0, key: node.mediaId });
     player.dataset.media = node.mediaId;
     parts.push(player);
   }

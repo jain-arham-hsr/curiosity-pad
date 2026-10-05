@@ -49,11 +49,30 @@ const visible = typeof IntersectionObserver === 'function'
   }, { rootMargin: '200px' })
   : null;
 
-export function createPlayer({ duration = 0 } = {}) {
-  const root = document.createElement('div');
-  root.className = 'player';
+// One <audio> per media id, shared across re-renders: the list is rebuilt on
+// every change (including incoming syncs), and a fresh element would stop
+// playback and show 0:00 while the detached old one kept playing. The
+// element's listeners are registered once and talk to whichever UI is
+// currently bound to it.
+const audioPool = new Map();
+function pooledAudio(key) {
+  if (key && audioPool.has(key)) return audioPool.get(key);
   const audio = document.createElement('audio');
   audio.preload = 'metadata';
+  audio.ui = null;
+  audio.addEventListener('play', () => audio.ui?.onPlay());
+  audio.addEventListener('pause', () => audio.ui?.onPause());
+  audio.addEventListener('ended', () => { audio.currentTime = 0; audio.ui?.paint(); });
+  audio.addEventListener('timeupdate', () => audio.ui?.paint());
+  audio.addEventListener('loadedmetadata', () => audio.ui?.paint());
+  if (key) audioPool.set(key, audio);
+  return audio;
+}
+
+export function createPlayer({ duration = 0, key = null } = {}) {
+  const root = document.createElement('div');
+  root.className = 'player';
+  const audio = pooledAudio(key);
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'play';
@@ -63,11 +82,21 @@ export function createPlayer({ duration = 0 } = {}) {
   wave.className = 'wave';
   wave.setAttribute('role', 'slider');
   wave.setAttribute('aria-label', 'Position');
-  const bars = Array.from({ length: BARS }, () => {
-    const b = document.createElement('i');
-    wave.append(b);
-    return b;
-  });
+  // Two identical bar layers: the muted base, and an accent copy on top that
+  // is clipped to the played fraction, so progress glides rather than steps.
+  const makeLayer = (cls) => {
+    const layer = document.createElement('div');
+    layer.className = cls;
+    const items = Array.from({ length: BARS }, () => {
+      const b = document.createElement('i');
+      layer.append(b);
+      return b;
+    });
+    wave.append(layer);
+    return { layer, items };
+  };
+  const base = makeLayer('bars');
+  const played = makeLayer('bars on');
   const time = document.createElement('span');
   time.className = 'time';
   time.textContent = formatDuration(duration);
@@ -76,14 +105,20 @@ export function createPlayer({ duration = 0 } = {}) {
   const total = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration);
   const paint = () => {
     const t = total();
-    const frac = t ? audio.currentTime / t : 0;
-    bars.forEach((b, i) => b.classList.toggle('on', i < Math.round(frac * BARS)));
+    const frac = t ? Math.max(0, Math.min(1, audio.currentTime / t)) : 0;
+    played.layer.style.clipPath = `inset(0 ${((1 - frac) * 100).toFixed(2)}% 0 0)`;
     time.textContent = audio.paused && audio.currentTime === 0
       ? formatDuration(t)
       : `${formatDuration(audio.currentTime)} / ${formatDuration(t)}`;
   };
-  const shape = (peaks) => bars.forEach((b, i) => { b.style.height = `${Math.round(4 + peaks[i] * 22)}px`; });
+  const shape = (peaks) => {
+    for (const { items } of [base, played]) items.forEach((b, i) => { b.style.height = `${Math.round(4 + peaks[i] * 22)}px`; });
+  };
   shape(FALLBACK.map((p) => p * 0.5));
+  paint();
+  // While playing, repaint every frame; currentTime advances continuously.
+  let raf = 0;
+  const tick = () => { paint(); if (!audio.paused) raf = requestAnimationFrame(tick); };
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -94,11 +129,10 @@ export function createPlayer({ duration = 0 } = {}) {
       audio.pause();
     }
   });
-  audio.addEventListener('play', () => { btn.innerHTML = PAUSE; btn.setAttribute('aria-label', 'Pause'); root.classList.add('playing'); });
-  audio.addEventListener('pause', () => { btn.innerHTML = PLAY; btn.setAttribute('aria-label', 'Play'); root.classList.remove('playing'); paint(); });
-  audio.addEventListener('ended', () => { audio.currentTime = 0; paint(); });
-  audio.addEventListener('timeupdate', paint);
-  audio.addEventListener('loadedmetadata', paint);
+  const onPlay = () => { btn.innerHTML = PAUSE; btn.setAttribute('aria-label', 'Pause'); root.classList.add('playing'); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); };
+  const onPause = () => { btn.innerHTML = PLAY; btn.setAttribute('aria-label', 'Play'); root.classList.remove('playing'); cancelAnimationFrame(raf); paint(); };
+  audio.ui = { onPlay, onPause, paint };
+  if (!audio.paused) onPlay(); // re-rendered while playing: carry on
 
   // Scrub: click or drag across the bars.
   let scrubbing = false;
@@ -126,7 +160,7 @@ export function createPlayer({ duration = 0 } = {}) {
   Object.defineProperty(root, 'src', {
     set(value) {
       url = value;
-      audio.src = value;
+      if (audio.src !== value) audio.src = value; // re-setting would restart playback
       if (visible) visible.observe(root); else load();
     },
     get() { return audio.src; },
