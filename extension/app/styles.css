@@ -45,7 +45,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
 a { color: var(--accent); }
 
@@ -341,8 +341,15 @@ button.marker { padding: 0 2px; }
   :root { font-size: 15px; }
   .actions button, .icon.round { min-height: 40px; }
   .actions { gap: 4px; font-size: 13px; }
-  .card { padding: 10px 12px 8px; }
+  .card { padding: 11px 13px 8px; }
+  .card .text { font-size: 17px; line-height: 1.4; }
+  .card.question .text { font-size: 17.5px; }
+  .meta { margin-top: 3px; font-size: 10.5px; gap: 7px; }
+  .meta .source { font-size: 10.5px; }
+  .marker { font-size: 11px; }
+  .player .time { font-size: 10.5px; }
   .trail { padding: 12px 14px; }
+  .trail-title { font-size: 16.5px; }
   .pill { min-height: 32px; }
   #bar .icon { min-width: 40px; min-height: 40px; }
   .card { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
