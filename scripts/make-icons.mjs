@@ -1,92 +1,126 @@
-// Draws the toolbar icon (a half-filled trail marker, ◐) as PNGs with no
-// dependencies. Run: node scripts/make-icons.mjs
+// Builds the app icon (a spiral pad under a night sky) as SVG files in assets/,
+// then rasterises them with the installed Chrome. No npm dependencies.
+//
+//   node scripts/make-icons.mjs
+//
+// assets/icon.svg           the full art (rounded tile)         → 48, 128, 192, 512
+// assets/icon-small.svg     fewer, bolder coils for tiny sizes  → 16, 32
+// assets/icon-maskable.svg  art at 72 % on a solid square       → 512 maskable
 
-import { deflateSync } from 'node:zlib';
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const COLOR = [0x2f, 0x6f, 0x5e];
-const SAMPLES = 4;
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const CHROME = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
+].find(existsSync);
 
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
+// ---- the art ---------------------------------------------------------------
 
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
+const PAGE = '#a8d9c3';
+const STACK = ['#4f8f78', '#6fb092', '#8cc7ab'];
+const HOLE = '#4f8f78';
+const INK = '#1f5f4a';
+const X = 30, W = 68, TOP = 33, BOTTOM = 103, R = 10;
 
-function chunk(type, data) {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([length, body, crc]);
-}
-
-// `maskable`: a full-bleed background with the mark in the safe zone, for
-// Android launchers that crop icons into circles or squircles.
-function icon(size, { maskable = false } = {}) {
-  const c = size / 2;
-  const scale = maskable ? 0.6 : 1;
-  const outer = size * 0.44 * scale;
-  const stroke = Math.max(1.25, size * 0.1 * scale);
-  const inner = outer - stroke;
-  const mark = (x, y) => {
-    const d = Math.hypot(x - c, y - c);
-    return (d <= outer && d >= inner) || (d < inner && x < c);
-  };
-  const BG = [0x16, 0x16, 0x17];
-  const FG = maskable ? [0x6f, 0xbf, 0xa6] : COLOR;
-  const covered = (x, y) => mark(x, y);
-
-  const raw = Buffer.alloc(size * (size * 4 + 1));
-  for (let y = 0; y < size; y++) {
-    const row = y * (size * 4 + 1);
-    raw[row] = 0; // filter: none
-    for (let x = 0; x < size; x++) {
-      let hits = 0;
-      for (let sy = 0; sy < SAMPLES; sy++) {
-        for (let sx = 0; sx < SAMPLES; sx++) {
-          if (covered(x + (sx + 0.5) / SAMPLES, y + (sy + 0.5) / SAMPLES)) hits++;
-        }
-      }
-      const i = row + 1 + x * 4;
-      const a = hits / (SAMPLES * SAMPLES);
-      if (maskable) {
-        for (let k = 0; k < 3; k++) raw[i + k] = Math.round(BG[k] + (FG[k] - BG[k]) * a);
-        raw[i + 3] = 255;
-      } else {
-        raw[i] = FG[0];
-        raw[i + 1] = FG[1];
-        raw[i + 2] = FG[2];
-        raw[i + 3] = Math.round(255 * a);
-      }
-    }
+// A deterministic star field, so every build is identical.
+function starField(n = 42) {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const x = 4 + rnd() * 120, y = 4 + rnd() * 120, r = 0.5 + rnd() * 1.1, o = 0.25 + rnd() * 0.5;
+    out += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="#fff" fill-opacity="${o.toFixed(2)}"/>`;
   }
-
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(size, 0);
-  header.writeUInt32BE(size, 4);
-  header[8] = 8; // bit depth
-  header[9] = 6; // RGBA
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
+  return out;
 }
 
-for (const size of [16, 32, 48, 128]) {
-  writeFileSync(new URL(`../extension/icons/${size}.png`, import.meta.url), icon(size));
+const page = (bottom, fill) =>
+  `<path d="M${X} ${TOP} h${W} v${bottom - TOP - R} a${R} ${R} 0 0 1 -${R} ${R} h-${W - 2 * R} a${R} ${R} 0 0 1 -${R} -${R} z" fill="${fill}"/>`;
+
+// Coils pass through the page: the loop is drawn behind it, then the page,
+// then a punched hole and the front strand of wire coming down into it.
+function coils(n, sw) {
+  const rx = 4.6, ry = 8.5, tilt = -22;
+  const step = W / n;
+  let back = '', front = '';
+  for (let i = 0; i < n; i++) {
+    const x = X + step * (i + 0.5);
+    back += `<ellipse cx="${x.toFixed(2)}" cy="${TOP}" rx="${rx}" ry="${ry}" transform="rotate(${tilt} ${x.toFixed(2)} ${TOP})" fill="none" stroke="url(#wire)" stroke-width="${sw}"/>`;
+    const cx = x + rx * 0.9, cy = TOP - 2, hx = x + 1.2, hy = TOP + 7;
+    front += `<circle cx="${hx.toFixed(2)}" cy="${hy}" r="2.6" fill="${HOLE}"/>`
+      + `<path d="M${cx.toFixed(2)} ${cy} C ${(cx + 0.5).toFixed(2)} ${cy + 4}, ${(hx + 1.5).toFixed(2)} ${hy - 3}, ${hx.toFixed(2)} ${hy}" fill="none" stroke="url(#wire)" stroke-width="${sw}" stroke-linecap="round"/>`;
+  }
+  return { back, front };
 }
-for (const size of [192, 512]) {
-  writeFileSync(new URL(`../web/icons/${size}.png`, import.meta.url), icon(size));
+
+const questionMark = (scale) =>
+  `<g transform="translate(64 71) scale(${scale})"><path d="M-14 -10 a14 14 0 1 1 21 12 c-5.5 3 -7 6 -7 12" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/><circle cx="0" cy="26" r="5" fill="${INK}"/></g>`;
+
+function pad({ coilCount, wire, qScale }) {
+  const c = coils(coilCount, wire);
+  return `<g transform="translate(0 -3)">${c.back}`
+    + page(BOTTOM + 8, STACK[0]) + page(BOTTOM + 5.5, STACK[1]) + page(BOTTOM + 3, STACK[2]) + page(BOTTOM, PAGE)
+    + `<rect x="${X}" y="${TOP}" width="${W}" height="10" fill="#000" opacity=".05"/>`
+    + c.front + questionMark(qScale) + '</g>';
 }
-writeFileSync(new URL('../web/icons/512-maskable.png', import.meta.url), icon(512, { maskable: true }));
-console.log('icons written to extension/icons/ and web/icons/');
+
+const defs = `<defs>
+  <radialGradient id="night" cx="50%" cy="25%" r="85%"><stop offset="0" stop-color="#1d4038"/><stop offset=".5" stop-color="#0f211d"/><stop offset="1" stop-color="#060c0b"/></radialGradient>
+  <linearGradient id="wire" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a9b74"/><stop offset="1" stop-color="#1f7a5c"/></linearGradient>
+</defs>`;
+
+function svg(body, { rounded = true } = {}) {
+  const tile = rounded ? `<rect width="128" height="128" rx="28" fill="url(#night)"/>` : `<rect width="128" height="128" fill="#0f211d"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">${defs}${tile}${starField()}${body}</svg>\n`;
+}
+
+const full = pad({ coilCount: 7, wire: 2.4, qScale: 0.82 });
+const small = pad({ coilCount: 4, wire: 3.2, qScale: 0.95 });
+const icons = {
+  'icon.svg': svg(full),
+  'icon-small.svg': svg(small),
+  // Maskable: launchers crop into circles/squircles, so keep the art inside the safe zone.
+  'icon-maskable.svg': svg(`<g transform="translate(64 64) scale(0.72) translate(-64 -64)">${full}</g>`, { rounded: false }),
+};
+
+mkdirSync(join(root, 'assets'), { recursive: true });
+for (const [name, text] of Object.entries(icons)) writeFileSync(join(root, 'assets', name), text);
+console.log('assets:', Object.keys(icons).join(', '));
+
+// ---- rasterise -------------------------------------------------------------
+
+const targets = [
+  ['icon-small.svg', 16, 'extension/icons/16.png'],
+  ['icon-small.svg', 32, 'extension/icons/32.png'],
+  ['icon.svg', 48, 'extension/icons/48.png'],
+  ['icon.svg', 128, 'extension/icons/128.png'],
+  ['icon.svg', 192, 'web/icons/192.png'],
+  ['icon.svg', 512, 'web/icons/512.png'],
+  ['icon-maskable.svg', 512, 'web/icons/512-maskable.png'],
+];
+
+if (!CHROME) {
+  console.error('Chrome not found; SVGs written but PNGs not rasterised.');
+  process.exit(1);
+}
+
+const work = join(tmpdir(), `cp-icons-${process.pid}`);
+mkdirSync(work, { recursive: true });
+for (const [src, size, out] of targets) {
+  const html = join(work, `${size}-${src}.html`);
+  writeFileSync(html, `<!doctype html><html><body style="margin:0;background:transparent">${readFileSync(join(root, 'assets', src), 'utf8').replace('<svg ', `<svg width="${size}" height="${size}" `)}</body></html>`);
+  const png = join(work, `${size}-${src}.png`);
+  execFileSync(CHROME, [
+    '--headless=new', '--hide-scrollbars', '--default-background-color=00000000', '--force-device-scale-factor=1',
+    `--window-size=${size},${size}`, `--screenshot=${png}`, `file://${html}`,
+  ], { stdio: 'ignore' });
+  mkdirSync(join(root, dirname(out)), { recursive: true });
+  writeFileSync(join(root, out), readFileSync(png));
+  console.log(`${out} (${size}px from ${src})`);
+}
+rmSync(work, { recursive: true, force: true });

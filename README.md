@@ -91,5 +91,5 @@ has to be switched on once: **Settings → Pages → Source: GitHub Actions**.
 
 ```sh
 npm test            # unit tests (Node 20+), no dependencies
-npm run icons       # redraw the toolbar icons
+npm run icons       # rebuild assets/*.svg and every PNG icon (needs Chrome installed)
 ```

@@ -78,6 +78,12 @@ const ICONS = {
   user: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
   pencil: svg('<path d="M4 20h4l10-10-4-4L4 16v4z"/>', 1.6),
 };
+// The app icon, simplified: a spiral pad with a question mark.
+const PAD_GLYPH = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="28" fill="#0f211d"/>
+<g transform="translate(0 -3)"><path d="M30 33h68v68a10 10 0 0 1-10 10H40a10 10 0 0 1-10-10z" fill="#4f8f78"/><path d="M30 33h68v63a10 10 0 0 1-10 10H40a10 10 0 0 1-10-10z" fill="#8cc7ab"/><path d="M30 33h68v60a10 10 0 0 1-10 10H40a10 10 0 0 1-10-10z" fill="#a8d9c3"/>
+<g fill="none" stroke="#2a9b74" stroke-width="3.2"><ellipse cx="38.5" cy="33" rx="4.6" ry="8.5" transform="rotate(-22 38.5 33)"/><ellipse cx="55.5" cy="33" rx="4.6" ry="8.5" transform="rotate(-22 55.5 33)"/><ellipse cx="72.5" cy="33" rx="4.6" ry="8.5" transform="rotate(-22 72.5 33)"/><ellipse cx="89.5" cy="33" rx="4.6" ry="8.5" transform="rotate(-22 89.5 33)"/></g>
+<g fill="#4f8f78"><circle cx="39.7" cy="40" r="2.6"/><circle cx="56.7" cy="40" r="2.6"/><circle cx="73.7" cy="40" r="2.6"/><circle cx="90.7" cy="40" r="2.6"/></g>
+<g transform="translate(64 71) scale(0.95)"><path d="M-14 -10a14 14 0 1 1 21 12c-5.5 3-7 6-7 12" fill="none" stroke="#1f5f4a" stroke-width="8" stroke-linecap="round"/><circle cy="26" r="5" fill="#1f5f4a"/></g></g></svg>`;
 
 // ---- tiny DOM helpers -----------------------------------------------------
 
@@ -254,7 +260,7 @@ function scheduleRefresh() {
 // ---- trails list ----------------------------------------------------------
 
 function renderTrailsBar() {
-  bar.replaceChildren(h('h1', {}, 'Curiosity Pad'), iconButton('help', 'How to use', (e) => showHelp(e.currentTarget)));
+  bar.replaceChildren(h('h1', {}, h('span', { class: 'brand', html: PAD_GLYPH }), 'Curiosity Pad'), iconButton('help', 'How to use', (e) => showHelp(e.currentTarget)));
 }
 
 function renderTrailList(trails) {
@@ -270,13 +276,13 @@ function renderTrailList(trails) {
       ? h('p', { class: 'account' }, 'Had trails before? ',
         button(`Restore from ${other.name}`, requestRestore, { cls: 'linkish' }), '.')
       : null;
-    list.replaceChildren(h('p', { class: 'empty' },
-      'No Question Trails yet. Start one below with the question you are chasing.'), restore, account);
+    list.replaceChildren(h('div', { class: 'empty' }, h('span', { class: 'glyph', html: PAD_GLYPH }),
+      h('span', {}, 'No Question Trails yet. Start one below with the question you are chasing.')), ...[restore, account].filter(Boolean));
     return;
   }
   list.replaceChildren(...trails.map((t) => h('button', { class: 'trail', type: 'button', onclick: () => openTrail(t.id) },
     h('span', { class: 'trail-title' }, t.title),
-    h('span', { class: 'trail-meta' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'} · ${shortDate(t.updated)}`))), account);
+    h('span', { class: 'trail-meta' }, h('span', { class: 'count' }, `${t.count} ${t.count === 1 ? 'entry' : 'entries'}`), shortDate(t.updated)))), account);
 }
 
 function showHelp(anchor) {
@@ -450,8 +456,8 @@ function renderNodes(scroll) {
   const top = list.scrollTop;
   const rows = flatten(state.nodes);
   if (!rows.length) {
-    list.replaceChildren(h('p', { class: 'empty' },
-      'Nothing here yet. Write what you want to understand, and add each new question as it comes up.'));
+    list.replaceChildren(h('div', { class: 'empty' }, h('span', { class: 'glyph', html: PAD_GLYPH }),
+      h('span', {}, 'Nothing here yet. Write what you want to understand, and add each new question as it comes up.')));
   } else {
     list.replaceChildren(...rows.map(nodeRow), ...[tip(rows.length)].filter(Boolean));
   }
